@@ -21,6 +21,22 @@ NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 ```
 
+## Supabase Migration
+
+### npm dev dependency로 사용
+```bash
+npm install supabase --save-dev
+npx supabase --help
+npx supabase init
+
+npx supabase login
+npx supabase link --project-ref <your-project-ref>
+npx supabase db push
+```
+docker desktop이 실행돼야 합니다.
+
+초기 스키마/정책은 `supabase/migrations/20260325090000_init_schema.sql`에 정의되어 있습니다.
+
 ## Project Structure
 
 ```text

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { createClient } from '@/lib/supabase/server';
-import { toSafeNextPath } from '@/utils/url';
+import { resolveRequestOrigin, toSafeNextPath } from '@/utils/url';
 
 interface GoogleSignInRequestBody {
   next?: string;
@@ -18,10 +18,8 @@ const parseNextPath = async (request: NextRequest): Promise<string> => {
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const nextPath = await parseNextPath(request);
-  const redirectTo = new URL(
-    `/auth/callback?next=${encodeURIComponent(nextPath)}`,
-    request.url,
-  ).toString();
+  const origin = resolveRequestOrigin(request);
+  const redirectTo = `${origin}/auth/callback?next=${encodeURIComponent(nextPath)}`;
 
   const supabase = createClient();
   const { data, error } = await supabase.auth.signInWithOAuth({

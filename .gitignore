@@ -23,3 +23,6 @@ pnpm-debug.log*
 
 # os
 .DS_Store
+
+# secret
+google_client_secret.json

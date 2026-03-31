@@ -3,7 +3,66 @@ import { type NextRequest, NextResponse } from 'next/server';
 
 import { env } from '@/utils/env';
 
+const AUTH_ROUTES = ['/login', '/signup'] as const;
+const PROTECTED_ROUTE_PREFIXES = [
+  '/home',
+  '/tickets',
+  '/logs',
+  '/stats',
+  '/settings',
+  '/onboarding',
+] as const;
+const ONBOARDING_ROUTES = ['/onboarding'] as const;
+const ISSUER_ONLY_ROUTES = ['/settings/rules'] as const;
+
+const isRouteMatch = (pathname: string, routes: readonly string[]): boolean => {
+  return routes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
+};
+
+const isAuthRoute = (pathname: string): boolean => {
+  return isRouteMatch(pathname, AUTH_ROUTES);
+};
+
+const isProtectedRoute = (pathname: string): boolean => {
+  return isRouteMatch(pathname, PROTECTED_ROUTE_PREFIXES);
+};
+
+const isOnboardingRoute = (pathname: string): boolean => {
+  return isRouteMatch(pathname, ONBOARDING_ROUTES);
+};
+
+const isIssuerOnlyRoute = (pathname: string): boolean => {
+  return isRouteMatch(pathname, ISSUER_ONLY_ROUTES);
+};
+
+const createRedirectResponse = (
+  request: NextRequest,
+  currentResponse: NextResponse,
+  pathname: string,
+  nextPath?: string,
+): NextResponse => {
+  const redirectUrl = request.nextUrl.clone();
+  redirectUrl.pathname = pathname;
+  redirectUrl.search = '';
+
+  if (nextPath) {
+    redirectUrl.searchParams.set('next', nextPath);
+  }
+
+  const redirectResponse = NextResponse.redirect(redirectUrl);
+
+  currentResponse.headers.forEach((value, key) => {
+    if (key.toLowerCase() === 'set-cookie') {
+      redirectResponse.headers.append(key, value);
+    }
+  });
+
+  return redirectResponse;
+};
+
 export const updateSession = async (request: NextRequest): Promise<NextResponse> => {
+  const pathname = request.nextUrl.pathname;
+  const search = request.nextUrl.search;
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(env.supabaseUrl, env.supabaseAnonKey, {
@@ -24,7 +83,48 @@ export const updateSession = async (request: NextRequest): Promise<NextResponse>
     },
   });
 
-  await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    if (isProtectedRoute(pathname)) {
+      const nextPath = `${pathname}${search}`;
+      return createRedirectResponse(request, response, '/login', nextPath);
+    }
+
+    return response;
+  }
+
+  if (isAuthRoute(pathname)) {
+    return createRedirectResponse(request, response, '/');
+  }
+
+  if (!isProtectedRoute(pathname)) {
+    return response;
+  }
+
+  const { data: member } = await supabase
+    .from('couple_members')
+    .select('couple_id, role')
+    .eq('user_id', user.id)
+    .limit(1)
+    .maybeSingle();
+
+  const hasCouple = Boolean(member?.couple_id);
+  const role = member?.role;
+
+  if (!hasCouple && !isOnboardingRoute(pathname)) {
+    return createRedirectResponse(request, response, '/onboarding');
+  }
+
+  if (hasCouple && isOnboardingRoute(pathname)) {
+    return createRedirectResponse(request, response, '/home');
+  }
+
+  if (isIssuerOnlyRoute(pathname) && role !== 'issuer') {
+    return createRedirectResponse(request, response, '/settings');
+  }
 
   return response;
 };

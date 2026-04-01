@@ -1,21 +1,61 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
-const generateInviteCode = (): string => {
-  const randomNumber = Math.floor(Math.random() * 10000)
-    .toString()
-    .padStart(4, '0');
-
-  return `TB-${randomNumber}`;
-};
+interface CreateInviteCodeResponse {
+  success: boolean;
+  coupleId: string;
+  inviteCode: string;
+  expiresInHours: number;
+}
 
 const OnboardingCreatePage = () => {
-  const inviteCode = useMemo(() => generateInviteCode(), []);
+  const [inviteCode, setInviteCode] = useState<string | null>(null);
+  const [expiresInHours, setExpiresInHours] = useState<number>(24);
+  const [isGenerating, setIsGenerating] = useState(true);
+  const [generateError, setGenerateError] = useState<string | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<'idle' | 'success' | 'error'>('idle');
 
+  const createInviteCode = useCallback(async () => {
+    setIsGenerating(true);
+    setGenerateError(null);
+    setCopyFeedback('idle');
+
+    try {
+      const response = await fetch('/api/onboarding/create', {
+        method: 'POST',
+      });
+
+      const result = (await response.json()) as Partial<CreateInviteCodeResponse> & {
+        error?: string;
+      };
+
+      if (!response.ok || !result.inviteCode || !result.expiresInHours) {
+        setGenerateError(result.error ?? '초대 코드 생성에 실패했습니다. 다시 시도해주세요.');
+        setInviteCode(null);
+        return;
+      }
+
+      setInviteCode(result.inviteCode);
+      setExpiresInHours(result.expiresInHours);
+    } catch {
+      setGenerateError('네트워크 오류로 코드 생성에 실패했습니다. 다시 시도해주세요.');
+      setInviteCode(null);
+    } finally {
+      setIsGenerating(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void createInviteCode();
+  }, [createInviteCode]);
+
   const handleCopy = async () => {
+    if (!inviteCode) {
+      return;
+    }
+
     try {
       await navigator.clipboard.writeText(inviteCode);
       setCopyFeedback('success');
@@ -39,18 +79,31 @@ const OnboardingCreatePage = () => {
           <p className="text-sm font-semibold text-slate-700">초대 코드</p>
           <div className="rounded-xl border border-teal-200 bg-teal-50 px-4 py-3 text-center">
             <span className="font-mono text-4xl font-bold tracking-wider text-teal-700">
-              {inviteCode}
+              {isGenerating ? '생성 중...' : (inviteCode ?? '생성 실패')}
             </span>
           </div>
+          {generateError && <p className="text-sm font-medium text-rose-600">{generateError}</p>}
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
             onClick={handleCopy}
-            className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-700"
+            disabled={isGenerating || !inviteCode}
+            className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-400"
           >
             코드 복사
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              void createInviteCode();
+            }}
+            disabled={isGenerating}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+          >
+            {isGenerating ? '생성 중...' : '코드 다시 생성'}
           </button>
 
           {copyFeedback === 'success' && (
@@ -64,12 +117,13 @@ const OnboardingCreatePage = () => {
         </div>
 
         <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-          이 코드는 생성 시점부터 24시간 동안 유효합니다.
+          이 코드는 생성 시점부터 {expiresInHours}시간 동안 유효합니다.
         </div>
 
         <button
           type="button"
-          className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+          disabled={isGenerating || !inviteCode}
+          className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
         >
           파트너 연결 확인
         </button>

@@ -19,7 +19,11 @@ npm run dev
 ```env
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
 ```
+
+`SUPABASE_SERVICE_ROLE_KEY`는 온보딩 생성/연결 API에서 서버 측 DB 작업에 사용됩니다.
+절대 `NEXT_PUBLIC_` 접두사로 노출하지 마세요.
 
 ## Supabase Migration
 

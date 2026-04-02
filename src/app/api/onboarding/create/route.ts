@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 
+import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
+import { ensurePublicUserProfile } from '@/lib/supabase/ensure-user-profile';
 
 const MAX_CODE_GENERATION_ATTEMPTS = 20;
 
@@ -24,7 +26,28 @@ export async function POST(): Promise<NextResponse> {
     return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
   }
 
-  const { data: existingMember, error: memberLookupError } = await supabase
+  let adminClient: ReturnType<typeof createAdminClient>;
+
+  try {
+    adminClient = createAdminClient();
+  } catch {
+    return NextResponse.json(
+      {
+        error: 'SUPABASE_SERVICE_ROLE_KEY is required for onboarding API.',
+      },
+      { status: 500 },
+    );
+  }
+
+  const ensuredUserProfile = await ensurePublicUserProfile(adminClient, user);
+  if (!ensuredUserProfile.ok) {
+    return NextResponse.json(
+      { error: `Failed to prepare user profile: ${ensuredUserProfile.error}` },
+      { status: 500 },
+    );
+  }
+
+  const { data: existingMember, error: memberLookupError } = await adminClient
     .from('couple_members')
     .select('id')
     .eq('user_id', user.id)
@@ -43,7 +66,7 @@ export async function POST(): Promise<NextResponse> {
 
   for (let attempt = 0; attempt < MAX_CODE_GENERATION_ATTEMPTS; attempt += 1) {
     const inviteCode = generateInviteCode();
-    const { data, error } = await supabase
+    const { data, error } = await adminClient
       .from('couples')
       .insert({
         invite_code: inviteCode,
@@ -58,7 +81,10 @@ export async function POST(): Promise<NextResponse> {
     }
 
     if (error?.code !== '23505') {
-      return NextResponse.json({ error: 'Failed to create invite code.' }, { status: 500 });
+      return NextResponse.json(
+        { error: `Failed to create invite code: ${error?.message ?? 'unknown error'}` },
+        { status: 500 },
+      );
     }
   }
 
@@ -66,22 +92,28 @@ export async function POST(): Promise<NextResponse> {
     return NextResponse.json({ error: 'Failed to allocate unique invite code.' }, { status: 500 });
   }
 
-  const { error: createMemberError } = await supabase.from('couple_members').insert({
+  const { error: createMemberError } = await adminClient.from('couple_members').insert({
     couple_id: createdCouple.id,
     user_id: user.id,
     role: 'issuer',
   });
 
   if (createMemberError) {
-    return NextResponse.json({ error: 'Failed to create issuer membership.' }, { status: 500 });
+    return NextResponse.json(
+      { error: `Failed to create issuer membership: ${createMemberError.message}` },
+      { status: 500 },
+    );
   }
 
-  const { error: createRulesError } = await supabase.from('rules').insert({
+  const { error: createRulesError } = await adminClient.from('rules').insert({
     couple_id: createdCouple.id,
   });
 
   if (createRulesError) {
-    return NextResponse.json({ error: 'Failed to initialize couple rules.' }, { status: 500 });
+    return NextResponse.json(
+      { error: `Failed to initialize couple rules: ${createRulesError.message}` },
+      { status: 500 },
+    );
   }
 
   return NextResponse.json({

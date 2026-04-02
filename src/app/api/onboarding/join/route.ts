@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
+import { ensurePublicUserProfile } from '@/lib/supabase/ensure-user-profile';
 
 interface JoinRequestBody {
   inviteCode: string;
@@ -46,7 +48,26 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
   }
 
-  const { data: existingMember, error: memberLookupError } = await supabase
+  let adminClient: ReturnType<typeof createAdminClient>;
+
+  try {
+    adminClient = createAdminClient();
+  } catch {
+    return NextResponse.json(
+      { error: 'SUPABASE_SERVICE_ROLE_KEY is required for onboarding API.' },
+      { status: 500 },
+    );
+  }
+
+  const ensuredUserProfile = await ensurePublicUserProfile(adminClient, user);
+  if (!ensuredUserProfile.ok) {
+    return NextResponse.json(
+      { error: `Failed to prepare user profile: ${ensuredUserProfile.error}` },
+      { status: 500 },
+    );
+  }
+
+  const { data: existingMember, error: memberLookupError } = await adminClient
     .from('couple_members')
     .select('id')
     .eq('user_id', user.id)
@@ -61,7 +82,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'User is already connected to a couple.' }, { status: 409 });
   }
 
-  const { data: couple, error: coupleError } = await supabase
+  const { data: couple, error: coupleError } = await adminClient
     .from('couples')
     .select('id, status')
     .eq('invite_code', body.inviteCode)
@@ -76,23 +97,29 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Invite code is invalid or expired.' }, { status: 404 });
   }
 
-  const { error: createMemberError } = await supabase.from('couple_members').insert({
+  const { error: createMemberError } = await adminClient.from('couple_members').insert({
     couple_id: couple.id,
     user_id: user.id,
     role: 'receiver',
   });
 
   if (createMemberError) {
-    return NextResponse.json({ error: 'Failed to join couple.' }, { status: 500 });
+    return NextResponse.json(
+      { error: `Failed to join couple: ${createMemberError.message}` },
+      { status: 500 },
+    );
   }
 
-  const { error: activateCoupleError } = await supabase
+  const { error: activateCoupleError } = await adminClient
     .from('couples')
     .update({ status: 'active' })
     .eq('id', couple.id);
 
   if (activateCoupleError) {
-    return NextResponse.json({ error: 'Failed to update couple status.' }, { status: 500 });
+    return NextResponse.json(
+      { error: `Failed to update couple status: ${activateCoupleError.message}` },
+      { status: 500 },
+    );
   }
 
   return NextResponse.json({

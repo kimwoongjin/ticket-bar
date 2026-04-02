@@ -5,7 +5,7 @@ import { resolveRequestOrigin, toSafeNextPath } from '@/utils/url';
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const code = request.nextUrl.searchParams.get('code');
-  const nextPath = toSafeNextPath(request.nextUrl.searchParams.get('next'), '/');
+  const nextPath = toSafeNextPath(request.nextUrl.searchParams.get('next'), '/onboarding');
   const origin = resolveRequestOrigin(request);
 
   if (!code) {

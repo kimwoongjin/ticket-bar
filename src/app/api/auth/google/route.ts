@@ -10,9 +10,9 @@ interface GoogleSignInRequestBody {
 const parseNextPath = async (request: NextRequest): Promise<string> => {
   try {
     const body = (await request.json()) as GoogleSignInRequestBody;
-    return toSafeNextPath(body.next ?? null, '/');
+    return toSafeNextPath(body.next ?? null, '/onboarding');
   } catch {
-    return '/';
+    return '/onboarding';
   }
 };
 

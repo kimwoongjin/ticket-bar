@@ -97,7 +97,7 @@ export const updateSession = async (request: NextRequest): Promise<NextResponse>
   }
 
   if (isAuthRoute(pathname)) {
-    return createRedirectResponse(request, response, '/');
+    return createRedirectResponse(request, response, '/onboarding');
   }
 
   if (!isProtectedRoute(pathname)) {

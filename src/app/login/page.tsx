@@ -8,6 +8,27 @@ const isValidEmail = (value: string): boolean => {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 };
 
+const toSafeClientNextPath = (value: string | null, fallbackPath: string): string => {
+  if (!value) {
+    return fallbackPath;
+  }
+
+  if (!value.startsWith('/') || value.startsWith('//')) {
+    return fallbackPath;
+  }
+
+  return value;
+};
+
+const getNextPathFromCurrentLocation = (): string => {
+  if (typeof window === 'undefined') {
+    return '/onboarding';
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  return toSafeClientNextPath(params.get('next'), '/onboarding');
+};
+
 const LoginPage = () => {
   const router = useRouter();
 
@@ -36,6 +57,8 @@ const LoginPage = () => {
     setIsEmailSubmitting(true);
 
     try {
+      const nextPath = getNextPathFromCurrentLocation();
+
       const response = await fetch('/api/auth/sign-in', {
         method: 'POST',
         headers: {
@@ -54,7 +77,7 @@ const LoginPage = () => {
         return;
       }
 
-      router.push('/');
+      router.push(nextPath);
       router.refresh();
     } catch {
       setErrorMessage('네트워크 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
@@ -68,13 +91,15 @@ const LoginPage = () => {
     setIsGoogleSubmitting(true);
 
     try {
+      const nextPath = getNextPathFromCurrentLocation();
+
       const response = await fetch('/api/auth/google', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          next: '/',
+          next: nextPath,
         }),
       });
 

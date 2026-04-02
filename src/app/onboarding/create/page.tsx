@@ -10,12 +10,69 @@ interface CreateInviteCodeResponse {
   expiresInHours: number;
 }
 
+interface OnboardingStatusResponse {
+  connected: boolean;
+  memberCount: number;
+  role?: string;
+  inviteCode?: string;
+  status?: string;
+  error?: string;
+}
+
 const OnboardingCreatePage = () => {
   const [inviteCode, setInviteCode] = useState<string | null>(null);
   const [expiresInHours, setExpiresInHours] = useState<number>(24);
   const [isGenerating, setIsGenerating] = useState(true);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<'idle' | 'success' | 'error'>('idle');
+  const [connectionState, setConnectionState] = useState<
+    'idle' | 'checking' | 'waiting' | 'connected' | 'error'
+  >('idle');
+  const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
+
+  const checkConnectionStatus = useCallback(
+    async (isPolling: boolean): Promise<OnboardingStatusResponse | null> => {
+      if (!isPolling) {
+        setConnectionState('checking');
+        setConnectionMessage(null);
+      }
+
+      try {
+        const response = await fetch('/api/onboarding/status', { method: 'GET' });
+        const result = (await response.json()) as OnboardingStatusResponse;
+
+        if (!response.ok) {
+          setConnectionState('error');
+          setConnectionMessage(result.error ?? '연결 상태 확인에 실패했습니다.');
+          return null;
+        }
+
+        if (result.role === 'issuer' && result.inviteCode) {
+          setInviteCode((currentInviteCode) => currentInviteCode ?? result.inviteCode ?? null);
+        }
+
+        if (result.connected) {
+          setConnectionState('connected');
+          setConnectionMessage('파트너 연결이 완료되었어요. 이제 홈으로 이동할 수 있어요.');
+          return result;
+        }
+
+        setConnectionState('waiting');
+        if (!isPolling) {
+          setConnectionMessage(
+            '아직 연결 대기 중이에요. 파트너가 코드를 입력하면 자동으로 갱신됩니다.',
+          );
+        }
+
+        return result;
+      } catch {
+        setConnectionState('error');
+        setConnectionMessage('네트워크 오류로 연결 상태 확인에 실패했습니다.');
+        return null;
+      }
+    },
+    [],
+  );
 
   const createInviteCode = useCallback(async () => {
     setIsGenerating(true);
@@ -32,6 +89,17 @@ const OnboardingCreatePage = () => {
       };
 
       if (!response.ok || !result.inviteCode || !result.expiresInHours) {
+        if (response.status === 409) {
+          const statusResult = await checkConnectionStatus(false);
+
+          if (statusResult?.inviteCode) {
+            setInviteCode(statusResult.inviteCode);
+            setExpiresInHours(24);
+            setGenerateError(null);
+            return;
+          }
+        }
+
         setGenerateError(result.error ?? '초대 코드 생성에 실패했습니다. 다시 시도해주세요.');
         setInviteCode(null);
         return;
@@ -45,11 +113,25 @@ const OnboardingCreatePage = () => {
     } finally {
       setIsGenerating(false);
     }
-  }, []);
+  }, [checkConnectionStatus]);
 
   useEffect(() => {
     void createInviteCode();
   }, [createInviteCode]);
+
+  useEffect(() => {
+    if (!inviteCode || connectionState === 'connected') {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      void checkConnectionStatus(true);
+    }, 5000);
+
+    return () => {
+      clearInterval(timer);
+    };
+  }, [checkConnectionStatus, connectionState, inviteCode]);
 
   const handleCopy = async () => {
     if (!inviteCode) {
@@ -124,9 +206,20 @@ const OnboardingCreatePage = () => {
           type="button"
           disabled={isGenerating || !inviteCode}
           className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+          onClick={() => {
+            void checkConnectionStatus(false);
+          }}
         >
-          파트너 연결 확인
+          {connectionState === 'checking' ? '확인 중...' : '파트너 연결 확인'}
         </button>
+
+        {connectionMessage && (
+          <p
+            className={`text-sm font-medium ${connectionState === 'connected' ? 'text-emerald-600' : connectionState === 'error' ? 'text-rose-600' : 'text-slate-600'}`}
+          >
+            {connectionMessage}
+          </p>
+        )}
       </section>
 
       <div className="flex items-center gap-4 text-sm">

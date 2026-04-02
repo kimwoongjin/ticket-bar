@@ -220,6 +220,15 @@ const OnboardingCreatePage = () => {
             {connectionMessage}
           </p>
         )}
+
+        {connectionState === 'connected' && (
+          <Link
+            href="/home"
+            className="inline-flex w-full items-center justify-center rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-700"
+          >
+            홈으로 이동
+          </Link>
+        )}
       </section>
 
       <div className="flex items-center gap-4 text-sm">

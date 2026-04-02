@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 
 const INVITE_CODE_REGEX = /^TB-[0-9]{4}$/;
@@ -20,8 +21,11 @@ const normalizeInviteCode = (value: string): string => {
 };
 
 const OnboardingJoinPage = () => {
+  const router = useRouter();
+
   const [inviteCode, setInviteCode] = useState('');
   const [submitState, setSubmitState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [submitMessage, setSubmitMessage] = useState<string | null>(null);
 
   const trimmedCode = inviteCode.trim();
   const isValidFormat = INVITE_CODE_REGEX.test(trimmedCode);
@@ -43,19 +47,40 @@ const OnboardingJoinPage = () => {
 
     if (!isValidFormat) {
       setSubmitState('error');
+      setSubmitMessage('코드 형식을 확인해주세요.');
       return;
     }
 
     setSubmitState('loading');
+    setSubmitMessage(null);
 
     try {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 350);
+      const response = await fetch('/api/onboarding/join', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          inviteCode: trimmedCode,
+        }),
       });
 
+      const result = (await response.json()) as { error?: string; success?: boolean };
+
+      if (!response.ok || !result.success) {
+        setSubmitState('error');
+        setSubmitMessage(result.error ?? '코드 확인에 실패했어요. 다시 시도해주세요.');
+        return;
+      }
+
       setSubmitState('success');
+      setSubmitMessage('코드 확인 성공! 온보딩을 완료했어요.');
+
+      router.push('/home');
+      router.refresh();
     } catch {
       setSubmitState('error');
+      setSubmitMessage('네트워크 오류로 연결에 실패했어요. 잠시 후 다시 시도해주세요.');
     }
   };
 
@@ -84,6 +109,7 @@ const OnboardingJoinPage = () => {
               setInviteCode(normalizeInviteCode(event.target.value));
               if (submitState !== 'idle') {
                 setSubmitState('idle');
+                setSubmitMessage(null);
               }
             }}
             placeholder="TB-1234"
@@ -99,14 +125,10 @@ const OnboardingJoinPage = () => {
           </p>
 
           {submitState === 'error' && (
-            <p className="text-sm font-medium text-rose-600">
-              코드 확인에 실패했어요. 형식을 다시 확인하거나 새 코드를 요청해주세요.
-            </p>
+            <p className="text-sm font-medium text-rose-600">{submitMessage}</p>
           )}
           {submitState === 'success' && (
-            <p className="text-sm font-medium text-emerald-600">
-              코드 확인 성공! 다음 단계(API 연결)에서 실제 연결 처리됩니다.
-            </p>
+            <p className="text-sm font-medium text-emerald-600">{submitMessage}</p>
           )}
 
           <button

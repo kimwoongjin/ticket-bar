@@ -96,14 +96,6 @@ export const updateSession = async (request: NextRequest): Promise<NextResponse>
     return response;
   }
 
-  if (isAuthRoute(pathname)) {
-    return createRedirectResponse(request, response, '/onboarding');
-  }
-
-  if (!isProtectedRoute(pathname)) {
-    return response;
-  }
-
   const { data: member } = await supabase
     .from('couple_members')
     .select('couple_id, role')
@@ -111,14 +103,34 @@ export const updateSession = async (request: NextRequest): Promise<NextResponse>
     .limit(1)
     .maybeSingle();
 
-  const hasCouple = Boolean(member?.couple_id);
+  const coupleId = member?.couple_id ?? null;
   const role = member?.role;
+  let isConnected = false;
 
-  if (!hasCouple && !isOnboardingRoute(pathname)) {
+  if (coupleId) {
+    const { data: couple } = await supabase
+      .from('couples')
+      .select('status')
+      .eq('id', coupleId)
+      .limit(1)
+      .maybeSingle();
+
+    isConnected = couple?.status === 'active';
+  }
+
+  if (isAuthRoute(pathname)) {
+    return createRedirectResponse(request, response, isConnected ? '/home' : '/onboarding');
+  }
+
+  if (!isProtectedRoute(pathname)) {
+    return response;
+  }
+
+  if (!isConnected && !isOnboardingRoute(pathname)) {
     return createRedirectResponse(request, response, '/onboarding');
   }
 
-  if (hasCouple && isOnboardingRoute(pathname)) {
+  if (isConnected && isOnboardingRoute(pathname)) {
     return createRedirectResponse(request, response, '/home');
   }
 

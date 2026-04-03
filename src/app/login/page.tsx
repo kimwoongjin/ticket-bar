@@ -22,11 +22,11 @@ const toSafeClientNextPath = (value: string | null, fallbackPath: string): strin
 
 const getNextPathFromCurrentLocation = (): string => {
   if (typeof window === 'undefined') {
-    return '/onboarding';
+    return '/home';
   }
 
   const params = new URLSearchParams(window.location.search);
-  return toSafeClientNextPath(params.get('next'), '/onboarding');
+  return toSafeClientNextPath(params.get('next'), '/home');
 };
 
 const LoginPage = () => {

@@ -1,6 +1,39 @@
+'use client';
+
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useState } from 'react';
 
 const HomePage = () => {
+  const router = useRouter();
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+
+  const handleSignOut = async () => {
+    setSignOutError(null);
+    setIsSigningOut(true);
+
+    try {
+      const response = await fetch('/api/auth/sign-out', {
+        method: 'POST',
+      });
+
+      const result = (await response.json()) as { error?: string };
+
+      if (!response.ok) {
+        setSignOutError(result.error ?? '로그아웃에 실패했습니다.');
+        return;
+      }
+
+      router.push('/login');
+      router.refresh();
+    } catch {
+      setSignOutError('네트워크 오류로 로그아웃에 실패했습니다.');
+    } finally {
+      setIsSigningOut(false);
+    }
+  };
+
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-6 py-10">
       <section className="flex items-start justify-between">
@@ -10,6 +43,18 @@ const HomePage = () => {
           <p className="text-sm text-slate-600">
             온보딩이 완료되었습니다. 다음 스프린트에서 실제 대시보드 데이터가 연결됩니다.
           </p>
+        </div>
+
+        <div className="flex flex-col items-end gap-2">
+          <button
+            type="button"
+            onClick={handleSignOut}
+            disabled={isSigningOut}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+          >
+            {isSigningOut ? '로그아웃 중...' : '로그아웃'}
+          </button>
+          {signOutError && <p className="text-xs font-medium text-rose-600">{signOutError}</p>}
         </div>
       </section>
 

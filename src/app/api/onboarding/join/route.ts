@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { createAdminClient } from '@/lib/supabase/admin';
+import { resolveUserMembership } from '@/lib/supabase/couple-membership';
 import { createClient } from '@/lib/supabase/server';
 import { ensurePublicUserProfile } from '@/lib/supabase/ensure-user-profile';
 
@@ -67,18 +68,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const { data: existingMember, error: memberLookupError } = await adminClient
-    .from('couple_members')
-    .select('id')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle();
+  const { membership, error: membershipError } = await resolveUserMembership(adminClient, user.id);
 
-  if (memberLookupError) {
-    return NextResponse.json({ error: 'Failed to verify membership state.' }, { status: 500 });
+  if (membershipError) {
+    return NextResponse.json({ error: membershipError }, { status: 500 });
   }
 
-  if (existingMember) {
+  if (membership) {
     return NextResponse.json({ error: 'User is already connected to a couple.' }, { status: 409 });
   }
 

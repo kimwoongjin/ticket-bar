@@ -1,6 +1,7 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { type NextRequest, NextResponse } from 'next/server';
 
+import { resolveUserMembership } from '@/lib/supabase/couple-membership';
 import { env } from '@/utils/env';
 
 const AUTH_ROUTES = ['/login', '/signup'] as const;
@@ -96,27 +97,10 @@ export const updateSession = async (request: NextRequest): Promise<NextResponse>
     return response;
   }
 
-  const { data: member } = await supabase
-    .from('couple_members')
-    .select('couple_id, role')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle();
+  const { membership } = await resolveUserMembership(supabase, user.id);
 
-  const coupleId = member?.couple_id ?? null;
-  const role = member?.role;
-  let isConnected = false;
-
-  if (coupleId) {
-    const { data: couple } = await supabase
-      .from('couples')
-      .select('status')
-      .eq('id', coupleId)
-      .limit(1)
-      .maybeSingle();
-
-    isConnected = couple?.status === 'active';
-  }
+  const isConnected = membership?.status === 'active';
+  const role = membership?.role;
 
   if (isAuthRoute(pathname)) {
     return createRedirectResponse(request, response, isConnected ? '/home' : '/onboarding');

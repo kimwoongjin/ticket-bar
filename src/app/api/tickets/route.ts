@@ -22,7 +22,7 @@ export async function GET(): Promise<NextResponse> {
     adminClient = createAdminClient();
   } catch {
     return NextResponse.json(
-      { error: 'SUPABASE_SERVICE_ROLE_KEY is required for onboarding API.' },
+      { error: 'SUPABASE_SERVICE_ROLE_KEY is required for tickets API.' },
       { status: 500 },
     );
   }
@@ -33,27 +33,32 @@ export async function GET(): Promise<NextResponse> {
     return NextResponse.json({ error: membershipError }, { status: 500 });
   }
 
-  if (!membership) {
-    return NextResponse.json({ connected: false, memberCount: 0 });
+  if (!membership || membership.status !== 'active') {
+    return NextResponse.json({ error: 'Active couple membership is required.' }, { status: 403 });
   }
 
-  const { data: members, error: membersError } = await adminClient
-    .from('couple_members')
-    .select('id')
-    .eq('couple_id', membership.coupleId);
+  const { data: tickets, error: ticketsError } = await adminClient
+    .from('tickets')
+    .select('id, title, status, expires_at, created_at')
+    .eq('couple_id', membership.coupleId)
+    .order('created_at', { ascending: false });
 
-  if (membersError) {
-    return NextResponse.json({ error: 'Failed to load member count.' }, { status: 500 });
+  if (ticketsError) {
+    return NextResponse.json(
+      { error: `Failed to load tickets: ${ticketsError.message}` },
+      { status: 500 },
+    );
   }
-
-  const memberCount = members?.length ?? 0;
 
   return NextResponse.json({
-    connected: membership.status === 'active' && memberCount >= 2,
-    memberCount,
-    role: membership.role,
-    coupleId: membership.coupleId,
-    inviteCode: membership.inviteCode,
-    status: membership.status,
+    success: true,
+    tickets:
+      tickets?.map((ticket) => ({
+        id: ticket.id,
+        title: ticket.title,
+        status: ticket.status,
+        expiresAt: ticket.expires_at,
+        createdAt: ticket.created_at,
+      })) ?? [],
   });
 }

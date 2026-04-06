@@ -20,10 +20,13 @@ npm run dev
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
+CRON_SECRET=
 ```
 
 `SUPABASE_SERVICE_ROLE_KEY`는 온보딩 생성/연결 API에서 서버 측 DB 작업에 사용됩니다.
 절대 `NEXT_PUBLIC_` 접두사로 노출하지 마세요.
+
+`CRON_SECRET`은 타임아웃 스케줄러 API(`/api/cron/ticket-requests/timeout`) 호출 인증에 사용됩니다.
 
 ## Supabase Migration
 
@@ -42,6 +45,48 @@ npx supabase db push
 docker desktop이 실행돼야 합니다.
 
 초기 스키마/정책은 `supabase/migrations/20260325090000_init_schema.sql`에 정의되어 있습니다.
+
+## Ticket Request Timeout Scheduler
+
+만료된 `pending` 요청을 `rules.timeout_action` 기준으로 자동 처리하는 API가 추가되어 있습니다.
+
+- Endpoint: `POST /api/cron/ticket-requests/timeout`
+- Header: `Authorization: Bearer <CRON_SECRET>` 또는 `x-cron-secret: <CRON_SECRET>`
+
+처리 규칙:
+
+- `auto_approve` → 요청 `approved`, 티켓 `used`, `ticket_logs` 생성
+- `auto_reject` → 요청 `rejected`, 티켓 `available`
+- `return` → 요청 `returned`, 티켓 `available`
+
+### Supabase에서 스케줄 등록 예시 (HTTP 호출)
+
+프로젝트 SQL Editor에서 `pg_cron`, `pg_net` 확장 활성화 후 아래처럼 잡을 등록할 수 있습니다.
+
+```sql
+select cron.schedule(
+  'ticket-requests-timeout-every-minute',
+  '* * * * *',
+  $$
+    select net.http_post(
+      url := 'https://<your-app-domain>/api/cron/ticket-requests/timeout',
+      headers := jsonb_build_object(
+        'Content-Type', 'application/json',
+        'Authorization', 'Bearer <CRON_SECRET>'
+      ),
+      body := '{}'::jsonb
+    );
+  $$
+);
+```
+
+> 운영 환경에서는 스케줄 호출 URL을 실제 배포 주소(예: Vercel 도메인 + `/api/cron/ticket-requests/timeout`)로 설정하고,
+> `CRON_SECRET`은 SQL에 하드코딩하지 말고 Vault/Secret 관리 기능을 사용하세요.
+
+### 참고: SQL Cron 방식
+
+타임아웃 처리 로직을 SQL 함수로 옮기면(네트워크 호출 없이) 더 단순하고 보안 표면이 작아집니다.
+현재 코드베이스는 TypeScript API에서 상태 전이/롤백을 처리하도록 구현되어 있어 HTTP 스케줄 방식으로 먼저 제공했습니다.
 
 ## Project Structure
 

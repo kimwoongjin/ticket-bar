@@ -37,6 +37,40 @@ interface CreateTicketRequestResponse {
   error?: string;
 }
 
+interface PendingTicketRequest {
+  id: string;
+  ticketId: string;
+  ticketTitle: string;
+  requestedBy: {
+    id: string;
+    name: string;
+    email: string | null;
+  };
+  status: 'pending';
+  memo: string | null;
+  expiresAt: string;
+  createdAt: string;
+}
+
+interface PendingTicketRequestsResponse {
+  success?: boolean;
+  requests?: PendingTicketRequest[];
+  error?: string;
+}
+
+interface RespondTicketRequestResponse {
+  success?: boolean;
+  request?: {
+    id: string;
+    status: 'approved' | 'rejected' | 'returned';
+  };
+  ticket?: {
+    id: string;
+    status: TicketStatus;
+  };
+  error?: string;
+}
+
 interface TicketsListResponse {
   success?: boolean;
   tickets?: IssuedTicket[];
@@ -108,26 +142,80 @@ const formatMonthLabel = (value: string): string => {
   }).format(date);
 };
 
+const getTimeoutProgress = (createdAt: string, expiresAt: string): number => {
+  const startTime = new Date(createdAt).getTime();
+  const endTime = new Date(expiresAt).getTime();
+  const now = Date.now();
+
+  if (Number.isNaN(startTime) || Number.isNaN(endTime) || endTime <= startTime) {
+    return 100;
+  }
+
+  if (now <= startTime) {
+    return 0;
+  }
+
+  if (now >= endTime) {
+    return 100;
+  }
+
+  return Math.min(100, Math.max(0, ((now - startTime) / (endTime - startTime)) * 100));
+};
+
+const formatRemainingTime = (expiresAt: string): string => {
+  const expires = new Date(expiresAt).getTime();
+
+  if (Number.isNaN(expires)) {
+    return '만료 시각 확인 불가';
+  }
+
+  const diff = expires - Date.now();
+
+  if (diff <= 0) {
+    return '요청 만료됨';
+  }
+
+  const minutes = Math.floor(diff / (1000 * 60));
+  const hours = Math.floor(minutes / 60);
+  const remainMinutes = minutes % 60;
+
+  if (hours <= 0) {
+    return `${remainMinutes}분 남음`;
+  }
+
+  return `${hours}시간 ${remainMinutes}분 남음`;
+};
+
 const TicketsPage = () => {
   const [role, setRole] = useState<MembershipRole>(null);
   const [isRoleLoading, setIsRoleLoading] = useState(true);
   const [isIssueModalOpen, setIsIssueModalOpen] = useState(false);
+  const [isRespondSheetOpen, setIsRespondSheetOpen] = useState(false);
   const [isRequestSheetOpen, setIsRequestSheetOpen] = useState(false);
   const [selectedRequestTicket, setSelectedRequestTicket] = useState<IssuedTicket | null>(null);
+  const [selectedPendingRequest, setSelectedPendingRequest] = useState<PendingTicketRequest | null>(
+    null,
+  );
   const [ticketTitle, setTicketTitle] = useState('');
+  const [responseMemo, setResponseMemo] = useState('');
   const [requestMemo, setRequestMemo] = useState('');
   const [issueCount, setIssueCount] = useState('1');
   const [expiresAtDate, setExpiresAtDate] = useState<Date | null>(null);
+  const [isResponding, setIsResponding] = useState(false);
   const [isIssuing, setIsIssuing] = useState(false);
   const [isRequesting, setIsRequesting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [isErrorMessage, setIsErrorMessage] = useState(false);
   const [issueMessage, setIssueMessage] = useState<string | null>(null);
   const [isIssueErrorMessage, setIsIssueErrorMessage] = useState(false);
+  const [respondMessage, setRespondMessage] = useState<string | null>(null);
+  const [isRespondErrorMessage, setIsRespondErrorMessage] = useState(false);
   const [requestMessage, setRequestMessage] = useState<string | null>(null);
   const [isRequestErrorMessage, setIsRequestErrorMessage] = useState(false);
   const [selectedFilter, setSelectedFilter] = useState<TicketFilter>('all');
   const [issuedTickets, setIssuedTickets] = useState<IssuedTicket[]>([]);
+  const [pendingRequests, setPendingRequests] = useState<PendingTicketRequest[]>([]);
+  const [isPendingRequestsLoading, setIsPendingRequestsLoading] = useState(false);
   const [isTicketsLoading, setIsTicketsLoading] = useState(true);
 
   const loadTickets = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
@@ -177,6 +265,61 @@ const TicketsPage = () => {
     }
   }, []);
 
+  const loadPendingRequests = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (!silent) {
+      setIsPendingRequestsLoading(true);
+    }
+
+    try {
+      const response = await fetch('/api/ticket-requests/pending', {
+        method: 'GET',
+      });
+
+      const result = (await response.json()) as Partial<PendingTicketRequestsResponse>;
+
+      if (!response.ok) {
+        if (!silent) {
+          setIsErrorMessage(true);
+          setMessage(result.error ?? '대기 요청 목록을 불러오지 못했습니다.');
+        }
+
+        return false;
+      }
+
+      const normalizedRequests = (result.requests ?? []).filter(
+        (request): request is PendingTicketRequest => {
+          return (
+            typeof request.id === 'string' &&
+            typeof request.ticketId === 'string' &&
+            typeof request.ticketTitle === 'string' &&
+            typeof request.requestedBy?.id === 'string' &&
+            typeof request.requestedBy?.name === 'string' &&
+            (request.requestedBy?.email === null ||
+              typeof request.requestedBy?.email === 'string') &&
+            request.status === 'pending' &&
+            (request.memo === null || typeof request.memo === 'string') &&
+            typeof request.expiresAt === 'string' &&
+            typeof request.createdAt === 'string'
+          );
+        },
+      );
+
+      setPendingRequests(normalizedRequests);
+      return true;
+    } catch {
+      if (!silent) {
+        setIsErrorMessage(true);
+        setMessage('네트워크 오류로 대기 요청 목록을 불러오지 못했습니다.');
+      }
+
+      return false;
+    } finally {
+      if (!silent) {
+        setIsPendingRequestsLoading(false);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     const loadMembership = async () => {
       setIsRoleLoading(true);
@@ -204,11 +347,23 @@ const TicketsPage = () => {
           return;
         }
 
-        setRole(result.role ?? null);
+        const currentRole = result.role ?? null;
+        setRole(currentRole);
+
+        if (currentRole === 'issuer') {
+          setIsPendingRequestsLoading(true);
+          await Promise.all([loadTickets(), loadPendingRequests()]);
+          return;
+        }
+
+        setPendingRequests([]);
+        setIsPendingRequestsLoading(false);
         await loadTickets();
       } catch {
         setRole(null);
         setIssuedTickets([]);
+        setPendingRequests([]);
+        setIsPendingRequestsLoading(false);
         setIsTicketsLoading(false);
         setMessage('네트워크 오류로 권한 정보를 불러오지 못했습니다.');
         setIsErrorMessage(true);
@@ -218,7 +373,7 @@ const TicketsPage = () => {
     };
 
     void loadMembership();
-  }, [loadTickets]);
+  }, [loadPendingRequests, loadTickets]);
 
   const filteredTickets = useMemo(() => {
     if (selectedFilter === 'all') {
@@ -429,6 +584,108 @@ const TicketsPage = () => {
     }
   };
 
+  const openRespondSheet = (request: PendingTicketRequest) => {
+    setSelectedPendingRequest(request);
+    setResponseMemo('');
+    setRespondMessage(null);
+    setIsRespondErrorMessage(false);
+    setIsRespondSheetOpen(true);
+  };
+
+  const closeRespondSheet = () => {
+    if (isResponding) {
+      return;
+    }
+
+    setIsRespondSheetOpen(false);
+    setSelectedPendingRequest(null);
+    setResponseMemo('');
+    setRespondMessage(null);
+    setIsRespondErrorMessage(false);
+  };
+
+  const handleRespondRequest = async (action: 'approve' | 'reject' | 'return') => {
+    if (!selectedPendingRequest) {
+      setIsRespondErrorMessage(true);
+      setRespondMessage('처리할 요청을 선택해주세요.');
+      return;
+    }
+
+    const normalizedResponseMemo = responseMemo.trim();
+
+    if (action === 'reject' && !normalizedResponseMemo) {
+      setIsRespondErrorMessage(true);
+      setRespondMessage('거절 사유를 입력해주세요.');
+      return;
+    }
+
+    if (normalizedResponseMemo.length > 300) {
+      setIsRespondErrorMessage(true);
+      setRespondMessage('응답 메모는 300자 이하로 입력해주세요.');
+      return;
+    }
+
+    setIsResponding(true);
+    setRespondMessage(null);
+    setIsRespondErrorMessage(false);
+
+    try {
+      const response = await fetch(`/api/ticket-requests/${selectedPendingRequest.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action,
+          logMemo: normalizedResponseMemo || null,
+        }),
+      });
+
+      const result = (await response.json()) as RespondTicketRequestResponse;
+
+      if (!response.ok || !result.success) {
+        setIsRespondErrorMessage(true);
+        setRespondMessage(result.error ?? '요청 처리에 실패했습니다.');
+        return;
+      }
+
+      const [ticketsSynced, pendingSynced] = await Promise.all([
+        loadTickets({ silent: true }),
+        loadPendingRequests({ silent: true }),
+      ]);
+
+      if (!ticketsSynced) {
+        const nextTicketStatus = action === 'approve' ? 'used' : 'available';
+
+        setIssuedTickets((previous) =>
+          previous.map((ticket) =>
+            ticket.id === selectedPendingRequest.ticketId
+              ? { ...ticket, status: nextTicketStatus }
+              : ticket,
+          ),
+        );
+      }
+
+      if (!pendingSynced) {
+        setPendingRequests((previous) =>
+          previous.filter((request) => request.id !== selectedPendingRequest.id),
+        );
+      }
+
+      const actionLabel =
+        action === 'approve' ? '승인' : action === 'reject' ? '거절' : '반환 처리';
+
+      setIsErrorMessage(false);
+      setMessage(`요청을 ${actionLabel}했습니다.`);
+      closeRespondSheet();
+    } catch {
+      setIsRespondErrorMessage(true);
+      setRespondMessage('네트워크 오류로 요청 처리에 실패했습니다.');
+    } finally {
+      setIsResponding(false);
+    }
+  };
+
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-6 py-10">
       <section className="flex flex-wrap items-start justify-between gap-3">
@@ -472,6 +729,65 @@ const TicketsPage = () => {
         <p className={`text-sm font-medium ${isErrorMessage ? 'text-rose-600' : 'text-teal-700'}`}>
           {message}
         </p>
+      )}
+
+      {role === 'issuer' && (
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-slate-800">대기 중인 요청</h2>
+            <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+              {pendingRequests.length}건
+            </span>
+          </div>
+
+          {isPendingRequestsLoading ? (
+            <p className="text-sm text-slate-500">요청 목록을 불러오는 중입니다...</p>
+          ) : pendingRequests.length === 0 ? (
+            <p className="text-sm text-slate-500">현재 처리할 요청이 없습니다.</p>
+          ) : (
+            <div className="space-y-3">
+              {pendingRequests.map((request) => {
+                const timeoutProgress = getTimeoutProgress(request.createdAt, request.expiresAt);
+
+                return (
+                  <article
+                    key={request.id}
+                    className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-800">
+                          {request.ticketTitle}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          요청자: {request.requestedBy.name}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {formatRemainingTime(request.expiresAt)}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => openRespondSheet(request)}
+                        className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-700 transition hover:bg-teal-100"
+                      >
+                        요청 처리
+                      </button>
+                    </div>
+
+                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+                      <div
+                        className="h-full rounded-full bg-teal-500 transition-all"
+                        style={{ width: `${timeoutProgress}%` }}
+                      />
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
       )}
 
       {isTicketsLoading ? (
@@ -712,6 +1028,115 @@ const TicketsPage = () => {
                   </p>
                 )}
               </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isRespondSheetOpen && selectedPendingRequest && (
+        <div className="fixed inset-0 z-40 bg-slate-900/50">
+          <div className="absolute inset-x-0 bottom-0 rounded-t-3xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="mx-auto w-full max-w-3xl space-y-4">
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-blue-700">RESPONSE REQUEST</p>
+                <h2 className="text-xl font-bold text-slate-900">요청 승인/거절 처리</h2>
+                <p className="text-sm text-slate-600">요청 정보를 확인하고 액션을 선택하세요.</p>
+              </div>
+
+              <section className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                <p className="font-semibold text-slate-800">{selectedPendingRequest.ticketTitle}</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  요청자: {selectedPendingRequest.requestedBy.name}
+                  {selectedPendingRequest.requestedBy.email
+                    ? ` (${selectedPendingRequest.requestedBy.email})`
+                    : ''}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  요청 시각: {formatDateTime(selectedPendingRequest.createdAt)}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  만료 시각: {formatDateTime(selectedPendingRequest.expiresAt)}
+                </p>
+                <p className="mt-2 text-xs text-slate-600">
+                  요청 메모: {selectedPendingRequest.memo || '없음'}
+                </p>
+
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+                  <div
+                    className="h-full rounded-full bg-blue-500 transition-all"
+                    style={{
+                      width: `${getTimeoutProgress(
+                        selectedPendingRequest.createdAt,
+                        selectedPendingRequest.expiresAt,
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  {formatRemainingTime(selectedPendingRequest.expiresAt)}
+                </p>
+              </section>
+
+              <div className="space-y-1.5">
+                <label htmlFor="response-memo" className="text-sm font-semibold text-slate-700">
+                  거절/반환 사유 (거절 시 필수)
+                </label>
+                <textarea
+                  id="response-memo"
+                  value={responseMemo}
+                  maxLength={300}
+                  onChange={(event) => setResponseMemo(event.target.value)}
+                  rows={3}
+                  placeholder="예: 일정이 맞지 않아 이번 요청은 거절할게요."
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none ring-teal-500 transition focus:border-teal-400 focus:ring-2"
+                />
+                <p className="text-right text-xs text-slate-500">{responseMemo.length}/300</p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+                <button
+                  type="button"
+                  onClick={closeRespondSheet}
+                  disabled={isResponding}
+                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+                >
+                  닫기
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleRespondRequest('approve')}
+                  disabled={isResponding}
+                  className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                >
+                  승인
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleRespondRequest('reject')}
+                  disabled={isResponding}
+                  className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                >
+                  거절
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleRespondRequest('return')}
+                  disabled={isResponding}
+                  className="rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+                >
+                  반환 처리
+                </button>
+              </div>
+
+              {respondMessage && (
+                <p
+                  className={`text-sm font-medium ${
+                    isRespondErrorMessage ? 'text-rose-600' : 'text-teal-700'
+                  }`}
+                >
+                  {respondMessage}
+                </p>
+              )}
             </div>
           </div>
         </div>

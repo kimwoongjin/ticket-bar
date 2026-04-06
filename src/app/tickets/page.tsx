@@ -23,6 +23,20 @@ interface IssueTicketsResponse {
   error?: string;
 }
 
+interface CreateTicketRequestResponse {
+  success?: boolean;
+  request?: {
+    id: string;
+    ticketId: string;
+    requestedBy: string;
+    status: 'pending';
+    memo: string | null;
+    expiresAt: string;
+    createdAt: string;
+  };
+  error?: string;
+}
+
 interface TicketsListResponse {
   success?: boolean;
   tickets?: IssuedTicket[];
@@ -98,14 +112,20 @@ const TicketsPage = () => {
   const [role, setRole] = useState<MembershipRole>(null);
   const [isRoleLoading, setIsRoleLoading] = useState(true);
   const [isIssueModalOpen, setIsIssueModalOpen] = useState(false);
+  const [isRequestSheetOpen, setIsRequestSheetOpen] = useState(false);
+  const [selectedRequestTicket, setSelectedRequestTicket] = useState<IssuedTicket | null>(null);
   const [ticketTitle, setTicketTitle] = useState('');
+  const [requestMemo, setRequestMemo] = useState('');
   const [issueCount, setIssueCount] = useState('1');
   const [expiresAtDate, setExpiresAtDate] = useState<Date | null>(null);
   const [isIssuing, setIsIssuing] = useState(false);
+  const [isRequesting, setIsRequesting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [isErrorMessage, setIsErrorMessage] = useState(false);
   const [issueMessage, setIssueMessage] = useState<string | null>(null);
   const [isIssueErrorMessage, setIsIssueErrorMessage] = useState(false);
+  const [requestMessage, setRequestMessage] = useState<string | null>(null);
+  const [isRequestErrorMessage, setIsRequestErrorMessage] = useState(false);
   const [selectedFilter, setSelectedFilter] = useState<TicketFilter>('all');
   const [issuedTickets, setIssuedTickets] = useState<IssuedTicket[]>([]);
   const [isTicketsLoading, setIsTicketsLoading] = useState(true);
@@ -328,6 +348,87 @@ const TicketsPage = () => {
     }
   };
 
+  const openRequestSheet = (ticket: IssuedTicket) => {
+    setSelectedRequestTicket(ticket);
+    setRequestMemo('');
+    setRequestMessage(null);
+    setIsRequestErrorMessage(false);
+    setIsRequestSheetOpen(true);
+  };
+
+  const closeRequestSheet = () => {
+    if (isRequesting) {
+      return;
+    }
+
+    setIsRequestSheetOpen(false);
+    setSelectedRequestTicket(null);
+    setRequestMemo('');
+    setRequestMessage(null);
+    setIsRequestErrorMessage(false);
+  };
+
+  const handleRequestSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setRequestMessage(null);
+    setIsRequestErrorMessage(false);
+
+    if (!selectedRequestTicket) {
+      setIsRequestErrorMessage(true);
+      setRequestMessage('요청할 티켓을 선택해주세요.');
+      return;
+    }
+
+    const normalizedMemo = requestMemo.trim();
+
+    if (normalizedMemo.length > 300) {
+      setIsRequestErrorMessage(true);
+      setRequestMessage('메모는 300자 이하로 입력해주세요.');
+      return;
+    }
+
+    setIsRequesting(true);
+
+    try {
+      const response = await fetch('/api/ticket-requests', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ticketId: selectedRequestTicket.id,
+          memo: normalizedMemo || null,
+        }),
+      });
+
+      const result = (await response.json()) as CreateTicketRequestResponse;
+
+      if (!response.ok || !result.success) {
+        setIsRequestErrorMessage(true);
+        setRequestMessage(result.error ?? '티켓 사용 요청 전송에 실패했습니다.');
+        return;
+      }
+
+      const synced = await loadTickets({ silent: true });
+      if (!synced) {
+        setIssuedTickets((previous) =>
+          previous.map((ticket) =>
+            ticket.id === selectedRequestTicket.id ? { ...ticket, status: 'requested' } : ticket,
+          ),
+        );
+      }
+
+      setIsErrorMessage(false);
+      setMessage('티켓 사용 요청을 전송했습니다. 파트너 응답을 기다려주세요.');
+      closeRequestSheet();
+    } catch {
+      setIsRequestErrorMessage(true);
+      setRequestMessage('네트워크 오류로 요청 전송에 실패했습니다.');
+    } finally {
+      setIsRequesting(false);
+    }
+  };
+
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-6 py-10">
       <section className="flex flex-wrap items-start justify-between gap-3">
@@ -422,6 +523,18 @@ const TicketsPage = () => {
                         {ticket.expiresAt ? formatDateTime(ticket.expiresAt) : '설정 안함'}
                       </p>
                     </div>
+
+                    {role === 'receiver' && ticket.status === 'available' && (
+                      <div className="mt-4">
+                        <button
+                          type="button"
+                          onClick={() => openRequestSheet(ticket)}
+                          className="w-full rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-700"
+                        >
+                          사용 요청
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -530,6 +643,77 @@ const TicketsPage = () => {
               )}
             </form>
           </section>
+        </div>
+      )}
+
+      {isRequestSheetOpen && selectedRequestTicket && (
+        <div className="fixed inset-0 z-30 bg-slate-900/50">
+          <div className="absolute inset-x-0 bottom-0 rounded-t-3xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="mx-auto w-full max-w-3xl space-y-4">
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-teal-700">REQUEST TICKET</p>
+                <h2 className="text-xl font-bold text-slate-900">티켓 사용 요청</h2>
+                <p className="text-sm text-slate-600">
+                  요청을 보내면 파트너가 승인/거절을 선택할 수 있습니다.
+                </p>
+              </div>
+
+              <form onSubmit={handleRequestSubmit} className="space-y-4">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-sm font-semibold text-slate-800">
+                    {selectedRequestTicket.title}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    티켓 #{selectedRequestTicket.id.slice(0, 8)}
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label htmlFor="request-memo" className="text-sm font-semibold text-slate-700">
+                    요청 메모 (선택)
+                  </label>
+                  <textarea
+                    id="request-memo"
+                    value={requestMemo}
+                    maxLength={300}
+                    onChange={(event) => setRequestMemo(event.target.value)}
+                    rows={4}
+                    placeholder="예: 이번 주 토요일 저녁에 사용하고 싶어요."
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none ring-teal-500 transition focus:border-teal-400 focus:ring-2"
+                  />
+                  <p className="text-right text-xs text-slate-500">{requestMemo.length}/300</p>
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={closeRequestSheet}
+                    disabled={isRequesting}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+                  >
+                    닫기
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isRequesting}
+                    className="w-full rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                  >
+                    {isRequesting ? '요청 전송 중...' : '요청 보내기'}
+                  </button>
+                </div>
+
+                {requestMessage && (
+                  <p
+                    className={`text-sm font-medium ${
+                      isRequestErrorMessage ? 'text-rose-600' : 'text-teal-700'
+                    }`}
+                  >
+                    {requestMessage}
+                  </p>
+                )}
+              </form>
+            </div>
+          </div>
         </div>
       )}
     </main>

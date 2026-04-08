@@ -16,14 +16,23 @@ interface PendingRequestRow {
   created_at: string;
 }
 
-const getMonthRange = (): { startIso: string; endIso: string } => {
+const getMonthRange = (): {
+  currentStartIso: string;
+  currentEndIso: string;
+  previousStartIso: string;
+  previousEndIso: string;
+} => {
   const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
+  const currentStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+  const currentEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
+  const previousStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
+  const previousEnd = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
 
   return {
-    startIso: start.toISOString(),
-    endIso: end.toISOString(),
+    currentStartIso: currentStart.toISOString(),
+    currentEndIso: currentEnd.toISOString(),
+    previousStartIso: previousStart.toISOString(),
+    previousEndIso: previousEnd.toISOString(),
   };
 };
 
@@ -60,9 +69,17 @@ export async function GET(): Promise<NextResponse> {
   }
 
   const role = membership.role as MembershipRole;
-  const { startIso, endIso } = getMonthRange();
+  const { currentStartIso, currentEndIso, previousStartIso, previousEndIso } = getMonthRange();
 
-  const [availableCountResult, usedCountResult, requestedTicketsResult] = await Promise.all([
+  const [
+    viewerProfileResult,
+    availableCountResult,
+    totalCountResult,
+    usedCountResult,
+    previousUsedCountResult,
+    requestedTicketsResult,
+  ] = await Promise.all([
+    adminClient.from('users').select('name').eq('id', user.id).limit(1).maybeSingle(),
     adminClient
       .from('tickets')
       .select('id', { count: 'exact', head: true })
@@ -72,15 +89,34 @@ export async function GET(): Promise<NextResponse> {
       .from('tickets')
       .select('id', { count: 'exact', head: true })
       .eq('couple_id', membership.coupleId)
+      .in('status', ['available', 'requested', 'used']),
+    adminClient
+      .from('tickets')
+      .select('id', { count: 'exact', head: true })
+      .eq('couple_id', membership.coupleId)
       .eq('status', 'used')
-      .gte('used_at', startIso)
-      .lt('used_at', endIso),
+      .gte('used_at', currentStartIso)
+      .lt('used_at', currentEndIso),
+    adminClient
+      .from('tickets')
+      .select('id', { count: 'exact', head: true })
+      .eq('couple_id', membership.coupleId)
+      .eq('status', 'used')
+      .gte('used_at', previousStartIso)
+      .lt('used_at', previousEndIso),
     adminClient
       .from('tickets')
       .select('id, title')
       .eq('couple_id', membership.coupleId)
       .eq('status', 'requested'),
   ]);
+
+  if (viewerProfileResult.error) {
+    return NextResponse.json(
+      { error: `Failed to load viewer profile: ${viewerProfileResult.error.message}` },
+      { status: 500 },
+    );
+  }
 
   if (availableCountResult.error) {
     return NextResponse.json(
@@ -89,9 +125,25 @@ export async function GET(): Promise<NextResponse> {
     );
   }
 
+  if (totalCountResult.error) {
+    return NextResponse.json(
+      { error: `Failed to load total ticket count: ${totalCountResult.error.message}` },
+      { status: 500 },
+    );
+  }
+
   if (usedCountResult.error) {
     return NextResponse.json(
       { error: `Failed to load monthly used count: ${usedCountResult.error.message}` },
+      { status: 500 },
+    );
+  }
+
+  if (previousUsedCountResult.error) {
+    return NextResponse.json(
+      {
+        error: `Failed to load previous monthly used count: ${previousUsedCountResult.error.message}`,
+      },
       { status: 500 },
     );
   }
@@ -160,13 +212,28 @@ export async function GET(): Promise<NextResponse> {
   }
 
   const latestPending = pendingRequests[0];
+  const nearestPending = pendingRequests.reduce<PendingRequestRow | null>((nearest, current) => {
+    if (!nearest) {
+      return current;
+    }
+
+    return new Date(current.expires_at).getTime() < new Date(nearest.expires_at).getTime()
+      ? current
+      : nearest;
+  }, null);
+
+  const viewerName = viewerProfileResult.data?.name ?? null;
 
   return NextResponse.json({
     success: true,
+    viewerName,
     role,
     availableTicketCount: availableCountResult.count ?? 0,
+    totalTicketCount: totalCountResult.count ?? 0,
     monthlyUsedCount: usedCountResult.count ?? 0,
+    previousMonthlyUsedCount: previousUsedCountResult.count ?? 0,
     pendingRequestCount: pendingRequests.length,
+    nearestPendingExpiresAt: nearestPending?.expires_at ?? null,
     latestPendingRequest: latestPending
       ? {
           id: latestPending.id,

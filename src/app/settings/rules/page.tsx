@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 
+import BottomNav from '@/components/navigation/bottom-nav';
+
 type TimeoutAction = 'return' | 'auto_approve' | 'auto_reject';
 type AutoIssueCycle = 'none' | 'weekly' | 'monthly';
 
@@ -116,7 +118,7 @@ const RulesSettingsPage = () => {
 
   if (isLoading) {
     return (
-      <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col gap-6 px-6 py-10">
+      <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col gap-6 px-6 py-10 pb-24">
         <section className="space-y-2">
           <p className="text-sm font-semibold text-teal-700">RULE SETTINGS</p>
           <h1 className="text-3xl font-bold tracking-tight text-slate-900">룰 설정</h1>
@@ -128,12 +130,14 @@ const RulesSettingsPage = () => {
             <span>설정 값을 불러오는 중입니다...</span>
           </div>
         </section>
+
+        <BottomNav />
       </main>
     );
   }
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col gap-6 px-6 py-10">
+    <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col gap-6 px-6 py-10 pb-24">
       <section className="space-y-2">
         <p className="text-sm font-semibold text-teal-700">RULE SETTINGS</p>
         <h1 className="text-3xl font-bold tracking-tight text-slate-900">룰 설정</h1>
@@ -220,6 +224,8 @@ const RulesSettingsPage = () => {
           </p>
         )}
       </form>
+
+      <BottomNav />
     </main>
   );
 };

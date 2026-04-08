@@ -4,6 +4,8 @@ import { ko } from 'date-fns/locale';
 import DatePicker from 'react-datepicker';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import BottomNav from '@/components/navigation/bottom-nav';
+
 type TicketStatus = 'available' | 'requested' | 'used' | 'expired';
 type TicketFilter = 'all' | TicketStatus;
 type MembershipRole = 'issuer' | 'receiver' | null;
@@ -238,6 +240,17 @@ const formatRemainingTime = (expiresAt: string): string => {
   }
 
   return `${hours}시간 ${remainMinutes}분 남음`;
+};
+
+const isTimeoutWarning = (expiresAt: string): boolean => {
+  const expires = new Date(expiresAt).getTime();
+
+  if (Number.isNaN(expires)) {
+    return false;
+  }
+
+  const diff = expires - Date.now();
+  return diff > 0 && diff <= 3_600_000;
 };
 
 const TicketsPage = () => {
@@ -915,12 +928,14 @@ const TicketsPage = () => {
   };
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-6 py-10">
+    <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-6 py-10 pb-24">
       <section className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <p className="text-sm font-semibold text-teal-700">TICKETS</p>
-          <h1 className="text-3xl font-bold tracking-tight text-slate-900">티켓 목록</h1>
-          <p className="text-sm text-slate-600">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+            티켓 목록
+          </h1>
+          <p className="text-xs text-slate-600 sm:text-sm">
             상태별 티켓을 확인하고, 발급자는 수동 발급을 진행할 수 있습니다.
           </p>
         </div>
@@ -929,7 +944,7 @@ const TicketsPage = () => {
           <button
             type="button"
             onClick={openIssueModal}
-            className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-700"
+            className="rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-teal-700 sm:text-sm"
           >
             수동 발급
           </button>
@@ -1005,6 +1020,7 @@ const TicketsPage = () => {
             <div className="space-y-3">
               {pendingRequests.map((request) => {
                 const timeoutProgress = getTimeoutProgress(request.createdAt, request.expiresAt);
+                const isWarning = isTimeoutWarning(request.expiresAt);
 
                 return (
                   <article
@@ -1022,7 +1038,9 @@ const TicketsPage = () => {
                         <p className="mt-1 text-xs text-slate-500">
                           사용 날짜: {request.requestedForDate}
                         </p>
-                        <p className="mt-1 text-xs text-slate-500">
+                        <p
+                          className={`mt-1 text-xs ${isWarning ? 'font-semibold text-rose-600' : 'text-slate-500'}`}
+                        >
                           {formatRemainingTime(request.expiresAt)}
                         </p>
                       </div>
@@ -1038,7 +1056,7 @@ const TicketsPage = () => {
 
                     <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
                       <div
-                        className="h-full rounded-full bg-teal-500 transition-all"
+                        className={`h-full rounded-full transition-all ${isWarning ? 'bg-rose-500' : 'bg-teal-500'}`}
                         style={{ width: `${timeoutProgress}%` }}
                       />
                     </div>
@@ -1423,7 +1441,11 @@ const TicketsPage = () => {
 
                 <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
                   <div
-                    className="h-full rounded-full bg-blue-500 transition-all"
+                    className={`h-full rounded-full transition-all ${
+                      isTimeoutWarning(selectedPendingRequest.expiresAt)
+                        ? 'bg-rose-500'
+                        : 'bg-blue-500'
+                    }`}
                     style={{
                       width: `${getTimeoutProgress(
                         selectedPendingRequest.createdAt,
@@ -1474,7 +1496,7 @@ const TicketsPage = () => {
                   type="button"
                   onClick={() => handleRespondRequest('reject')}
                   disabled={isResponding}
-                  className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
                 >
                   거절
                 </button>
@@ -1501,6 +1523,8 @@ const TicketsPage = () => {
           </div>
         </div>
       )}
+
+      <BottomNav />
     </main>
   );
 };

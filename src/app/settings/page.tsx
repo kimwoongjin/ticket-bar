@@ -1,8 +1,10 @@
 import Link from 'next/link';
 
+import BottomNav from '@/components/navigation/bottom-nav';
+
 const SettingsPage = () => {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-6 py-10">
+    <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-6 py-10 pb-24">
       <section className="space-y-2">
         <p className="text-sm font-semibold text-teal-700">SETTINGS</p>
         <h1 className="text-3xl font-bold tracking-tight text-slate-900">설정</h1>
@@ -25,6 +27,8 @@ const SettingsPage = () => {
           룰 설정 열기
         </Link>
       </section>
+
+      <BottomNav />
     </main>
   );
 };

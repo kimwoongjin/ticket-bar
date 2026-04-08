@@ -103,22 +103,24 @@ available → requested → used
 
 티켓 사용 요청. 승인 플로우의 핵심 테이블.
 
-| 컬럼         | 타입      | 설명                                                |
-| ------------ | --------- | --------------------------------------------------- |
-| id           | uuid PK   | —                                                   |
-| ticket_id    | uuid FK   | tickets.id                                          |
-| requested_by | uuid FK   | users.id (수신자)                                   |
-| status       | string    | `pending` \| `approved` \| `rejected` \| `returned` |
-| memo         | string    | 요청 메모                                           |
-| expires_at   | timestamp | 타임아웃 시각 (rules.timeout_hours 기준)            |
-| responded_at | timestamp | 파트너 응답 시각                                    |
-| created_at   | timestamp | 요청 시각                                           |
+| 컬럼               | 타입      | 설명                                                |
+| ------------------ | --------- | --------------------------------------------------- |
+| id                 | uuid PK   | —                                                   |
+| ticket_id          | uuid FK   | tickets.id                                          |
+| requested_by       | uuid FK   | users.id (수신자)                                   |
+| status             | string    | `pending` \| `approved` \| `rejected` \| `returned` |
+| memo               | string    | 요청 메모                                           |
+| requested_for_date | date      | 사용 희망 날짜 (발급/만료 범위 내 선택)             |
+| response_memo      | string    | 거절 사유 등 파트너 응답 메모                       |
+| expires_at         | timestamp | 타임아웃 시각 (rules.timeout_hours 기준)            |
+| responded_at       | timestamp | 파트너 응답 시각                                    |
+| created_at         | timestamp | 요청 시각                                           |
 
 **상태 흐름:**
 
 ```
 pending → approved  → (ticket_logs 생성, ticket.status = used)
-        → rejected  → (ticket.status = available 복구)
+        → rejected  → (ticket.status = available 복구, 같은 날짜 재요청 제한)
         → returned  → (ticket.status = available 복구, 재요청 가능)
 ```
 

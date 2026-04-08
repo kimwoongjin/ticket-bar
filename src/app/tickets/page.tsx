@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 type TicketStatus = 'available' | 'requested' | 'used' | 'expired';
 type TicketFilter = 'all' | TicketStatus;
 type MembershipRole = 'issuer' | 'receiver' | null;
+type ReceiverView = 'tickets' | 'history';
 
 interface IssuedTicket {
   id: string;
@@ -31,6 +32,7 @@ interface CreateTicketRequestResponse {
     requestedBy: string;
     status: 'pending';
     memo: string | null;
+    requestedForDate: string;
     expiresAt: string;
     createdAt: string;
   };
@@ -48,6 +50,7 @@ interface PendingTicketRequest {
   };
   status: 'pending';
   memo: string | null;
+  requestedForDate: string;
   expiresAt: string;
   createdAt: string;
 }
@@ -58,11 +61,37 @@ interface PendingTicketRequestsResponse {
   error?: string;
 }
 
+interface RequestHistoryItem {
+  id: string;
+  ticketId: string;
+  ticketTitle: string;
+  requestedBy: {
+    id: string;
+    name: string;
+    email: string | null;
+  };
+  status: 'approved' | 'rejected' | 'returned';
+  memo: string | null;
+  requestedForDate: string;
+  responseMemo: string | null;
+  respondedAt: string | null;
+  createdAt: string;
+}
+
+interface RequestHistoryResponse {
+  success?: boolean;
+  totalCount?: number;
+  requests?: RequestHistoryItem[];
+  error?: string;
+}
+
 interface RespondTicketRequestResponse {
   success?: boolean;
   request?: {
     id: string;
     status: 'approved' | 'rejected' | 'returned';
+    requestedForDate: string;
+    responseMemo: string | null;
   };
   ticket?: {
     id: string;
@@ -105,6 +134,18 @@ const statusBadgeClassName: Record<TicketStatus, string> = {
   expired: 'border-rose-200 bg-rose-50 text-rose-700',
 };
 
+const requestHistoryStatusLabel: Record<RequestHistoryItem['status'], string> = {
+  approved: '승인',
+  rejected: '거절',
+  returned: '반환',
+};
+
+const requestHistoryStatusClassName: Record<RequestHistoryItem['status'], string> = {
+  approved: 'border-teal-200 bg-teal-50 text-teal-700',
+  rejected: 'border-rose-200 bg-rose-50 text-rose-700',
+  returned: 'border-slate-200 bg-slate-100 text-slate-700',
+};
+
 const isTicketStatus = (value: string): value is TicketStatus => {
   return value === 'available' || value === 'requested' || value === 'used' || value === 'expired';
 };
@@ -140,6 +181,19 @@ const formatMonthLabel = (value: string): string => {
     year: 'numeric',
     month: 'long',
   }).format(date);
+};
+
+const formatDateOnly = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const startOfDay = (date: Date): Date => {
+  const next = new Date(date);
+  next.setHours(0, 0, 0, 0);
+  return next;
 };
 
 const getTimeoutProgress = (createdAt: string, expiresAt: string): number => {
@@ -192,6 +246,7 @@ const TicketsPage = () => {
   const [isIssueModalOpen, setIsIssueModalOpen] = useState(false);
   const [isRespondSheetOpen, setIsRespondSheetOpen] = useState(false);
   const [isRequestSheetOpen, setIsRequestSheetOpen] = useState(false);
+  const [receiverView, setReceiverView] = useState<ReceiverView>('tickets');
   const [selectedRequestTicket, setSelectedRequestTicket] = useState<IssuedTicket | null>(null);
   const [selectedPendingRequest, setSelectedPendingRequest] = useState<PendingTicketRequest | null>(
     null,
@@ -199,6 +254,7 @@ const TicketsPage = () => {
   const [ticketTitle, setTicketTitle] = useState('');
   const [responseMemo, setResponseMemo] = useState('');
   const [requestMemo, setRequestMemo] = useState('');
+  const [requestDate, setRequestDate] = useState<Date | null>(null);
   const [issueCount, setIssueCount] = useState('1');
   const [expiresAtDate, setExpiresAtDate] = useState<Date | null>(null);
   const [isResponding, setIsResponding] = useState(false);
@@ -215,8 +271,29 @@ const TicketsPage = () => {
   const [selectedFilter, setSelectedFilter] = useState<TicketFilter>('all');
   const [issuedTickets, setIssuedTickets] = useState<IssuedTicket[]>([]);
   const [pendingRequests, setPendingRequests] = useState<PendingTicketRequest[]>([]);
+  const [requestHistory, setRequestHistory] = useState<RequestHistoryItem[]>([]);
+  const [requestHistoryCount, setRequestHistoryCount] = useState(0);
   const [isPendingRequestsLoading, setIsPendingRequestsLoading] = useState(false);
+  const [isRequestHistoryLoading, setIsRequestHistoryLoading] = useState(false);
+  const [hasLoadedRequestHistory, setHasLoadedRequestHistory] = useState(false);
   const [isTicketsLoading, setIsTicketsLoading] = useState(true);
+
+  const requestDateRange = useMemo(() => {
+    if (!selectedRequestTicket) {
+      return null;
+    }
+
+    const minDate = startOfDay(new Date(selectedRequestTicket.createdAt));
+    const maxDate = selectedRequestTicket.expiresAt
+      ? startOfDay(new Date(new Date(selectedRequestTicket.expiresAt).getTime() - 1))
+      : null;
+
+    if (maxDate && maxDate.getTime() < minDate.getTime()) {
+      return null;
+    }
+
+    return { minDate, maxDate };
+  }, [selectedRequestTicket]);
 
   const loadTickets = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!silent) {
@@ -298,6 +375,7 @@ const TicketsPage = () => {
               typeof request.requestedBy?.email === 'string') &&
             request.status === 'pending' &&
             (request.memo === null || typeof request.memo === 'string') &&
+            typeof request.requestedForDate === 'string' &&
             typeof request.expiresAt === 'string' &&
             typeof request.createdAt === 'string'
           );
@@ -317,6 +395,91 @@ const TicketsPage = () => {
       if (!silent) {
         setIsPendingRequestsLoading(false);
       }
+    }
+  }, []);
+
+  const loadRequestHistory = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (!silent) {
+      setIsRequestHistoryLoading(true);
+    }
+
+    try {
+      const response = await fetch('/api/ticket-requests/history', {
+        method: 'GET',
+      });
+
+      const result = (await response.json()) as Partial<RequestHistoryResponse>;
+
+      if (!response.ok) {
+        if (!silent) {
+          setIsErrorMessage(true);
+          setMessage(result.error ?? '요청 처리 이력을 불러오지 못했습니다.');
+        }
+
+        return false;
+      }
+
+      const normalizedHistory = (result.requests ?? []).filter(
+        (request): request is RequestHistoryItem => {
+          return (
+            typeof request.id === 'string' &&
+            typeof request.ticketId === 'string' &&
+            typeof request.ticketTitle === 'string' &&
+            typeof request.requestedBy?.id === 'string' &&
+            typeof request.requestedBy?.name === 'string' &&
+            (request.requestedBy?.email === null ||
+              typeof request.requestedBy?.email === 'string') &&
+            (request.status === 'approved' ||
+              request.status === 'rejected' ||
+              request.status === 'returned') &&
+            (request.memo === null || typeof request.memo === 'string') &&
+            typeof request.requestedForDate === 'string' &&
+            (request.responseMemo === null || typeof request.responseMemo === 'string') &&
+            (request.respondedAt === null || typeof request.respondedAt === 'string') &&
+            typeof request.createdAt === 'string'
+          );
+        },
+      );
+
+      setRequestHistory(normalizedHistory);
+      setRequestHistoryCount(
+        typeof result.totalCount === 'number' ? result.totalCount : normalizedHistory.length,
+      );
+      return true;
+    } catch {
+      if (!silent) {
+        setIsErrorMessage(true);
+        setMessage('네트워크 오류로 요청 처리 이력을 불러오지 못했습니다.');
+      }
+
+      return false;
+    } finally {
+      if (!silent) {
+        setIsRequestHistoryLoading(false);
+      }
+    }
+  }, []);
+
+  const loadRequestHistoryCount = useCallback(async (): Promise<boolean> => {
+    try {
+      const response = await fetch('/api/ticket-requests/history?summary=true', {
+        method: 'GET',
+      });
+
+      const result = (await response.json()) as Partial<RequestHistoryResponse>;
+
+      if (!response.ok) {
+        setIsErrorMessage(true);
+        setMessage(result.error ?? '요청 처리 결과 수를 불러오지 못했습니다.');
+        return false;
+      }
+
+      setRequestHistoryCount(typeof result.totalCount === 'number' ? result.totalCount : 0);
+      return true;
+    } catch {
+      setIsErrorMessage(true);
+      setMessage('네트워크 오류로 요청 처리 결과 수를 불러오지 못했습니다.');
+      return false;
     }
   }, []);
 
@@ -342,28 +505,46 @@ const TicketsPage = () => {
 
         if (!result.connected) {
           setRole(null);
+          setReceiverView('tickets');
           setIssuedTickets([]);
+          setRequestHistory([]);
+          setRequestHistoryCount(0);
+          setHasLoadedRequestHistory(false);
           setIsTicketsLoading(false);
           return;
         }
 
         const currentRole = result.role ?? null;
         setRole(currentRole);
+        setReceiverView('tickets');
 
         if (currentRole === 'issuer') {
           setIsPendingRequestsLoading(true);
+          setRequestHistory([]);
+          setRequestHistoryCount(0);
+          setIsRequestHistoryLoading(false);
+          setHasLoadedRequestHistory(false);
           await Promise.all([loadTickets(), loadPendingRequests()]);
           return;
         }
 
         setPendingRequests([]);
         setIsPendingRequestsLoading(false);
-        await loadTickets();
+        setRequestHistory([]);
+        setRequestHistoryCount(0);
+        setIsRequestHistoryLoading(false);
+        setHasLoadedRequestHistory(false);
+        await Promise.all([loadTickets(), loadRequestHistoryCount()]);
       } catch {
         setRole(null);
+        setReceiverView('tickets');
         setIssuedTickets([]);
         setPendingRequests([]);
+        setRequestHistory([]);
+        setRequestHistoryCount(0);
+        setHasLoadedRequestHistory(false);
         setIsPendingRequestsLoading(false);
+        setIsRequestHistoryLoading(false);
         setIsTicketsLoading(false);
         setMessage('네트워크 오류로 권한 정보를 불러오지 못했습니다.');
         setIsErrorMessage(true);
@@ -373,7 +554,23 @@ const TicketsPage = () => {
     };
 
     void loadMembership();
-  }, [loadPendingRequests, loadTickets]);
+  }, [loadPendingRequests, loadRequestHistoryCount, loadRequestHistory, loadTickets]);
+
+  useEffect(() => {
+    if (role !== 'receiver' || receiverView !== 'history' || hasLoadedRequestHistory) {
+      return;
+    }
+
+    const loadHistoryForReceiverView = async () => {
+      const loaded = await loadRequestHistory();
+
+      if (loaded) {
+        setHasLoadedRequestHistory(true);
+      }
+    };
+
+    void loadHistoryForReceiverView();
+  }, [hasLoadedRequestHistory, loadRequestHistory, receiverView, role]);
 
   const filteredTickets = useMemo(() => {
     if (selectedFilter === 'all') {
@@ -506,6 +703,8 @@ const TicketsPage = () => {
   const openRequestSheet = (ticket: IssuedTicket) => {
     setSelectedRequestTicket(ticket);
     setRequestMemo('');
+    const minDate = startOfDay(new Date(ticket.createdAt));
+    setRequestDate(minDate);
     setRequestMessage(null);
     setIsRequestErrorMessage(false);
     setIsRequestSheetOpen(true);
@@ -519,6 +718,7 @@ const TicketsPage = () => {
     setIsRequestSheetOpen(false);
     setSelectedRequestTicket(null);
     setRequestMemo('');
+    setRequestDate(null);
     setRequestMessage(null);
     setIsRequestErrorMessage(false);
   };
@@ -531,6 +731,29 @@ const TicketsPage = () => {
     if (!selectedRequestTicket) {
       setIsRequestErrorMessage(true);
       setRequestMessage('요청할 티켓을 선택해주세요.');
+      return;
+    }
+
+    if (!requestDate || !requestDateRange) {
+      setIsRequestErrorMessage(true);
+      setRequestMessage('사용 날짜를 선택해주세요.');
+      return;
+    }
+
+    const normalizedRequestDate = startOfDay(requestDate);
+
+    if (normalizedRequestDate.getTime() < requestDateRange.minDate.getTime()) {
+      setIsRequestErrorMessage(true);
+      setRequestMessage('사용 날짜는 티켓 발급일 이후여야 합니다.');
+      return;
+    }
+
+    if (
+      requestDateRange.maxDate &&
+      normalizedRequestDate.getTime() > requestDateRange.maxDate.getTime()
+    ) {
+      setIsRequestErrorMessage(true);
+      setRequestMessage('사용 날짜는 티켓 만료일 이전으로 선택해주세요.');
       return;
     }
 
@@ -553,6 +776,7 @@ const TicketsPage = () => {
         body: JSON.stringify({
           ticketId: selectedRequestTicket.id,
           memo: normalizedMemo || null,
+          requestedForDate: formatDateOnly(normalizedRequestDate),
         }),
       });
 
@@ -637,7 +861,7 @@ const TicketsPage = () => {
         },
         body: JSON.stringify({
           action,
-          logMemo: normalizedResponseMemo || null,
+          logMemo: action === 'return' ? null : normalizedResponseMemo || null,
         }),
       });
 
@@ -673,7 +897,11 @@ const TicketsPage = () => {
       }
 
       const actionLabel =
-        action === 'approve' ? '승인' : action === 'reject' ? '거절' : '반환 처리';
+        action === 'approve'
+          ? '승인'
+          : action === 'reject'
+            ? '거절(사유 기록)'
+            : '반환(없던 일 처리)';
 
       setIsErrorMessage(false);
       setMessage(`요청을 ${actionLabel}했습니다.`);
@@ -708,22 +936,51 @@ const TicketsPage = () => {
         )}
       </section>
 
-      <section className="flex flex-wrap gap-2">
-        {FILTER_OPTIONS.map((option) => (
+      {role === 'receiver' && (
+        <section className="flex flex-wrap gap-2">
           <button
-            key={option.key}
             type="button"
-            onClick={() => setSelectedFilter(option.key)}
+            onClick={() => setReceiverView('tickets')}
             className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
-              selectedFilter === option.key
+              receiverView === 'tickets'
                 ? 'border-teal-300 bg-teal-50 text-teal-700'
                 : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
             }`}
           >
-            {option.label}
+            티켓 목록
           </button>
-        ))}
-      </section>
+          <button
+            type="button"
+            onClick={() => setReceiverView('history')}
+            className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+              receiverView === 'history'
+                ? 'border-teal-300 bg-teal-50 text-teal-700'
+                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            요청 처리 결과 ({requestHistoryCount})
+          </button>
+        </section>
+      )}
+
+      {(role !== 'receiver' || receiverView === 'tickets') && (
+        <section className="flex flex-wrap gap-2">
+          {FILTER_OPTIONS.map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => setSelectedFilter(option.key)}
+              className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                selectedFilter === option.key
+                  ? 'border-teal-300 bg-teal-50 text-teal-700'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </section>
+      )}
 
       {message && (
         <p className={`text-sm font-medium ${isErrorMessage ? 'text-rose-600' : 'text-teal-700'}`}>
@@ -763,6 +1020,9 @@ const TicketsPage = () => {
                           요청자: {request.requestedBy.name}
                         </p>
                         <p className="mt-1 text-xs text-slate-500">
+                          사용 날짜: {request.requestedForDate}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
                           {formatRemainingTime(request.expiresAt)}
                         </p>
                       </div>
@@ -790,74 +1050,136 @@ const TicketsPage = () => {
         </section>
       )}
 
-      {isTicketsLoading ? (
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center gap-3 text-sm text-slate-600">
-            <span
-              aria-hidden="true"
-              className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-teal-600"
-            />
-            <span>티켓 목록을 불러오는 중입니다...</span>
+      {role === 'receiver' && receiverView === 'history' && (
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-slate-800">요청 처리 결과</h2>
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
+              {requestHistoryCount}건
+            </span>
           </div>
-        </section>
-      ) : groupedTickets.length === 0 ? (
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <p className="text-sm font-semibold text-slate-700">아직 표시할 티켓이 없습니다.</p>
-          <p className="mt-2 text-sm text-slate-500">
-            수동 발급을 진행하거나 다음 주기 발급을 기다려주세요.
-          </p>
-        </section>
-      ) : (
-        <section className="space-y-5">
-          {groupedTickets.map(([monthLabel, tickets]) => (
-            <article key={monthLabel} className="space-y-3">
-              <h2 className="text-sm font-semibold text-slate-700">{monthLabel}</h2>
-              <div className="space-y-3">
-                {tickets.map((ticket) => (
-                  <div
-                    key={ticket.id}
-                    className={`rounded-2xl border border-slate-200 bg-white p-5 shadow-sm ${
-                      ticket.status === 'used' || ticket.status === 'expired' ? 'opacity-70' : ''
-                    }`}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="text-sm font-semibold text-slate-800">{ticket.title}</p>
-                        <p className="text-xs text-slate-500">티켓 #{ticket.id.slice(0, 8)}</p>
-                      </div>
-                      <span
-                        className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${statusBadgeClassName[ticket.status]}`}
-                      >
-                        {statusLabel[ticket.status]}
-                      </span>
-                    </div>
 
-                    <div className="mt-3 space-y-1 text-sm text-slate-600">
-                      <p>발급 시각: {formatDateTime(ticket.createdAt)}</p>
-                      <p>
-                        만료 시각:{' '}
-                        {ticket.expiresAt ? formatDateTime(ticket.expiresAt) : '설정 안함'}
+          {isRequestHistoryLoading ? (
+            <p className="text-sm text-slate-500">요청 처리 이력을 불러오는 중입니다...</p>
+          ) : requestHistory.length === 0 ? (
+            <p className="text-sm text-slate-500">아직 처리 완료된 요청이 없습니다.</p>
+          ) : (
+            <div className="space-y-3">
+              {requestHistory.map((history) => (
+                <article
+                  key={history.id}
+                  className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-800">{history.ticketTitle}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        사용 날짜: {history.requestedForDate}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        처리 시각:{' '}
+                        {history.respondedAt
+                          ? formatDateTime(history.respondedAt)
+                          : '처리 시각 없음'}
                       </p>
                     </div>
 
-                    {role === 'receiver' && ticket.status === 'available' && (
-                      <div className="mt-4">
-                        <button
-                          type="button"
-                          onClick={() => openRequestSheet(ticket)}
-                          className="w-full rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-700"
-                        >
-                          사용 요청
-                        </button>
-                      </div>
-                    )}
+                    <span
+                      className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${requestHistoryStatusClassName[history.status]}`}
+                    >
+                      {requestHistoryStatusLabel[history.status]}
+                    </span>
                   </div>
-                ))}
-              </div>
-            </article>
-          ))}
+
+                  <p className="mt-2 text-xs text-slate-600">요청 메모: {history.memo || '없음'}</p>
+
+                  {history.status === 'rejected' && (
+                    <p className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">
+                      거절 사유: {history.responseMemo || '사유 없음'}
+                    </p>
+                  )}
+
+                  {history.status === 'returned' && (
+                    <p className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600">
+                      반환 처리: 기존 요청을 취소한 상태로, 같은 날짜로 다시 요청할 수 있습니다.
+                    </p>
+                  )}
+                </article>
+              ))}
+            </div>
+          )}
         </section>
       )}
+
+      {(role !== 'receiver' || receiverView === 'tickets') &&
+        (isTicketsLoading ? (
+          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex items-center gap-3 text-sm text-slate-600">
+              <span
+                aria-hidden="true"
+                className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-teal-600"
+              />
+              <span>티켓 목록을 불러오는 중입니다...</span>
+            </div>
+          </section>
+        ) : groupedTickets.length === 0 ? (
+          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <p className="text-sm font-semibold text-slate-700">아직 표시할 티켓이 없습니다.</p>
+            <p className="mt-2 text-sm text-slate-500">
+              수동 발급을 진행하거나 다음 주기 발급을 기다려주세요.
+            </p>
+          </section>
+        ) : (
+          <section className="space-y-5">
+            {groupedTickets.map(([monthLabel, tickets]) => (
+              <article key={monthLabel} className="space-y-3">
+                <h2 className="text-sm font-semibold text-slate-700">{monthLabel}</h2>
+                <div className="space-y-3">
+                  {tickets.map((ticket) => (
+                    <div
+                      key={ticket.id}
+                      className={`rounded-2xl border border-slate-200 bg-white p-5 shadow-sm ${
+                        ticket.status === 'used' || ticket.status === 'expired' ? 'opacity-70' : ''
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-800">{ticket.title}</p>
+                          <p className="text-xs text-slate-500">티켓 #{ticket.id.slice(0, 8)}</p>
+                        </div>
+                        <span
+                          className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${statusBadgeClassName[ticket.status]}`}
+                        >
+                          {statusLabel[ticket.status]}
+                        </span>
+                      </div>
+
+                      <div className="mt-3 space-y-1 text-sm text-slate-600">
+                        <p>발급 시각: {formatDateTime(ticket.createdAt)}</p>
+                        <p>
+                          만료 시각:{' '}
+                          {ticket.expiresAt ? formatDateTime(ticket.expiresAt) : '설정 안함'}
+                        </p>
+                      </div>
+
+                      {role === 'receiver' && ticket.status === 'available' && (
+                        <div className="mt-4">
+                          <button
+                            type="button"
+                            onClick={() => openRequestSheet(ticket)}
+                            className="w-full rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-700"
+                          >
+                            사용 요청
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </section>
+        ))}
 
       {isIssueModalOpen && (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-900/50 px-4">
@@ -985,6 +1307,41 @@ const TicketsPage = () => {
                 </div>
 
                 <div className="space-y-1.5">
+                  <label htmlFor="request-date" className="text-sm font-semibold text-slate-700">
+                    사용 날짜
+                  </label>
+                  <DatePicker
+                    id="request-date"
+                    selected={requestDate}
+                    onChange={(value: Date | [Date | null, Date | null] | null) => {
+                      if (value instanceof Date || value === null) {
+                        setRequestDate(value);
+                      }
+                    }}
+                    minDate={requestDateRange?.minDate}
+                    maxDate={requestDateRange?.maxDate ?? undefined}
+                    dateFormat="yyyy.MM.dd"
+                    locale={ko}
+                    placeholderText="사용 날짜 선택"
+                    wrapperClassName="block w-full"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none ring-teal-500 transition focus:border-teal-400 focus:ring-2"
+                  />
+
+                  {requestDateRange ? (
+                    <p className="text-xs text-slate-500">
+                      선택 가능 범위: {formatDateOnly(requestDateRange.minDate)} ~{' '}
+                      {requestDateRange.maxDate
+                        ? formatDateOnly(requestDateRange.maxDate)
+                        : '만료일 없음'}
+                    </p>
+                  ) : (
+                    <p className="text-xs font-medium text-rose-600">
+                      현재 이 티켓은 요청 가능한 사용 날짜가 없습니다.
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
                   <label htmlFor="request-memo" className="text-sm font-semibold text-slate-700">
                     요청 메모 (선택)
                   </label>
@@ -1011,7 +1368,7 @@ const TicketsPage = () => {
                   </button>
                   <button
                     type="submit"
-                    disabled={isRequesting}
+                    disabled={isRequesting || !requestDateRange}
                     className="w-full rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-400"
                   >
                     {isRequesting ? '요청 전송 중...' : '요청 보내기'}
@@ -1055,6 +1412,9 @@ const TicketsPage = () => {
                   요청 시각: {formatDateTime(selectedPendingRequest.createdAt)}
                 </p>
                 <p className="mt-1 text-xs text-slate-500">
+                  사용 날짜: {selectedPendingRequest.requestedForDate}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
                   만료 시각: {formatDateTime(selectedPendingRequest.expiresAt)}
                 </p>
                 <p className="mt-2 text-xs text-slate-600">
@@ -1079,7 +1439,7 @@ const TicketsPage = () => {
 
               <div className="space-y-1.5">
                 <label htmlFor="response-memo" className="text-sm font-semibold text-slate-700">
-                  거절/반환 사유 (거절 시 필수)
+                  거절 사유 (거절 시 필수, 반환 시 입력값은 무시)
                 </label>
                 <textarea
                   id="response-memo"

@@ -22,6 +22,7 @@ interface HomeSummaryResponse {
       email: string | null;
     };
     memo: string | null;
+    requestedForDate: string;
     expiresAt: string;
     createdAt: string;
   } | null;
@@ -212,6 +213,7 @@ const HomePage = () => {
             <p className="font-semibold text-slate-800">{latestPendingRequest.ticketTitle}</p>
             <p>요청자: {latestPendingRequest.requestedBy.name}</p>
             <p>요청 시각: {formatDateTime(latestPendingRequest.createdAt)}</p>
+            <p>사용 날짜: {latestPendingRequest.requestedForDate}</p>
             <p>만료 시각: {formatDateTime(latestPendingRequest.expiresAt)}</p>
             <p>메모: {latestPendingRequest.memo || '없음'}</p>
           </div>

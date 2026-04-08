@@ -2,7 +2,7 @@
 
 import { ko } from 'date-fns/locale';
 import DatePicker from 'react-datepicker';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import BottomNav from '@/components/navigation/bottom-nav';
 
@@ -253,12 +253,16 @@ const isTimeoutWarning = (expiresAt: string): boolean => {
   return diff > 0 && diff <= 3_600_000;
 };
 
+const SHEET_ANIMATION_DURATION_MS = 260;
+
 const TicketsPage = () => {
   const [role, setRole] = useState<MembershipRole>(null);
   const [isRoleLoading, setIsRoleLoading] = useState(true);
   const [isIssueModalOpen, setIsIssueModalOpen] = useState(false);
   const [isRespondSheetOpen, setIsRespondSheetOpen] = useState(false);
   const [isRequestSheetOpen, setIsRequestSheetOpen] = useState(false);
+  const [isRequestSheetVisible, setIsRequestSheetVisible] = useState(false);
+  const [isRespondSheetVisible, setIsRespondSheetVisible] = useState(false);
   const [receiverView, setReceiverView] = useState<ReceiverView>('tickets');
   const [selectedRequestTicket, setSelectedRequestTicket] = useState<IssuedTicket | null>(null);
   const [selectedPendingRequest, setSelectedPendingRequest] = useState<PendingTicketRequest | null>(
@@ -268,6 +272,7 @@ const TicketsPage = () => {
   const [responseMemo, setResponseMemo] = useState('');
   const [requestMemo, setRequestMemo] = useState('');
   const [requestDate, setRequestDate] = useState<Date | null>(null);
+  const [isPushNotificationEnabled, setIsPushNotificationEnabled] = useState(true);
   const [issueCount, setIssueCount] = useState('1');
   const [expiresAtDate, setExpiresAtDate] = useState<Date | null>(null);
   const [isResponding, setIsResponding] = useState(false);
@@ -279,6 +284,9 @@ const TicketsPage = () => {
   const [isIssueErrorMessage, setIsIssueErrorMessage] = useState(false);
   const [respondMessage, setRespondMessage] = useState<string | null>(null);
   const [isRespondErrorMessage, setIsRespondErrorMessage] = useState(false);
+  const [approvedSummary, setApprovedSummary] = useState<{
+    remainingAvailableTicketCount: number;
+  } | null>(null);
   const [requestMessage, setRequestMessage] = useState<string | null>(null);
   const [isRequestErrorMessage, setIsRequestErrorMessage] = useState(false);
   const [selectedFilter, setSelectedFilter] = useState<TicketFilter>('all');
@@ -290,6 +298,8 @@ const TicketsPage = () => {
   const [isRequestHistoryLoading, setIsRequestHistoryLoading] = useState(false);
   const [hasLoadedRequestHistory, setHasLoadedRequestHistory] = useState(false);
   const [isTicketsLoading, setIsTicketsLoading] = useState(true);
+  const requestSheetCloseTimerRef = useRef<number | null>(null);
+  const respondSheetCloseTimerRef = useRef<number | null>(null);
 
   const requestDateRange = useMemo(() => {
     if (!selectedRequestTicket) {
@@ -585,6 +595,46 @@ const TicketsPage = () => {
     void loadHistoryForReceiverView();
   }, [hasLoadedRequestHistory, loadRequestHistory, receiverView, role]);
 
+  useEffect(() => {
+    if (!isRequestSheetOpen) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      setIsRequestSheetVisible(true);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [isRequestSheetOpen]);
+
+  useEffect(() => {
+    if (!isRespondSheetOpen) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      setIsRespondSheetVisible(true);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [isRespondSheetOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (requestSheetCloseTimerRef.current) {
+        window.clearTimeout(requestSheetCloseTimerRef.current);
+      }
+
+      if (respondSheetCloseTimerRef.current) {
+        window.clearTimeout(respondSheetCloseTimerRef.current);
+      }
+    };
+  }, []);
+
   const filteredTickets = useMemo(() => {
     if (selectedFilter === 'all') {
       return issuedTickets;
@@ -610,6 +660,22 @@ const TicketsPage = () => {
 
     return [...groups.entries()];
   }, [filteredTickets]);
+
+  const availableRequestTickets = useMemo(() => {
+    return issuedTickets.filter((ticket) => ticket.status === 'available');
+  }, [issuedTickets]);
+
+  const selectedPendingTicket = useMemo(() => {
+    if (!selectedPendingRequest) {
+      return null;
+    }
+
+    return issuedTickets.find((ticket) => ticket.id === selectedPendingRequest.ticketId) ?? null;
+  }, [issuedTickets, selectedPendingRequest]);
+
+  const remainingAvailableAfterApprovePreview = useMemo(() => {
+    return issuedTickets.filter((ticket) => ticket.status === 'available').length;
+  }, [issuedTickets]);
 
   const openIssueModal = () => {
     setTicketTitle('');
@@ -714,8 +780,15 @@ const TicketsPage = () => {
   };
 
   const openRequestSheet = (ticket: IssuedTicket) => {
+    if (requestSheetCloseTimerRef.current) {
+      window.clearTimeout(requestSheetCloseTimerRef.current);
+      requestSheetCloseTimerRef.current = null;
+    }
+
+    setIsRequestSheetVisible(false);
     setSelectedRequestTicket(ticket);
     setRequestMemo('');
+    setIsPushNotificationEnabled(true);
     const minDate = startOfDay(new Date(ticket.createdAt));
     setRequestDate(minDate);
     setRequestMessage(null);
@@ -728,12 +801,22 @@ const TicketsPage = () => {
       return;
     }
 
-    setIsRequestSheetOpen(false);
-    setSelectedRequestTicket(null);
-    setRequestMemo('');
-    setRequestDate(null);
-    setRequestMessage(null);
-    setIsRequestErrorMessage(false);
+    setIsRequestSheetVisible(false);
+
+    if (requestSheetCloseTimerRef.current) {
+      window.clearTimeout(requestSheetCloseTimerRef.current);
+    }
+
+    requestSheetCloseTimerRef.current = window.setTimeout(() => {
+      setIsRequestSheetOpen(false);
+      setSelectedRequestTicket(null);
+      setRequestMemo('');
+      setIsPushNotificationEnabled(true);
+      setRequestDate(null);
+      setRequestMessage(null);
+      setIsRequestErrorMessage(false);
+      requestSheetCloseTimerRef.current = null;
+    }, SHEET_ANIMATION_DURATION_MS);
   };
 
   const handleRequestSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -744,6 +827,12 @@ const TicketsPage = () => {
     if (!selectedRequestTicket) {
       setIsRequestErrorMessage(true);
       setRequestMessage('요청할 티켓을 선택해주세요.');
+      return;
+    }
+
+    if (availableRequestTickets.length === 0) {
+      setIsRequestErrorMessage(true);
+      setRequestMessage('현재 요청 가능한 티켓이 없습니다.');
       return;
     }
 
@@ -822,8 +911,15 @@ const TicketsPage = () => {
   };
 
   const openRespondSheet = (request: PendingTicketRequest) => {
+    if (respondSheetCloseTimerRef.current) {
+      window.clearTimeout(respondSheetCloseTimerRef.current);
+      respondSheetCloseTimerRef.current = null;
+    }
+
+    setIsRespondSheetVisible(false);
     setSelectedPendingRequest(request);
     setResponseMemo('');
+    setApprovedSummary(null);
     setRespondMessage(null);
     setIsRespondErrorMessage(false);
     setIsRespondSheetOpen(true);
@@ -834,11 +930,21 @@ const TicketsPage = () => {
       return;
     }
 
-    setIsRespondSheetOpen(false);
-    setSelectedPendingRequest(null);
-    setResponseMemo('');
-    setRespondMessage(null);
-    setIsRespondErrorMessage(false);
+    setIsRespondSheetVisible(false);
+
+    if (respondSheetCloseTimerRef.current) {
+      window.clearTimeout(respondSheetCloseTimerRef.current);
+    }
+
+    respondSheetCloseTimerRef.current = window.setTimeout(() => {
+      setIsRespondSheetOpen(false);
+      setSelectedPendingRequest(null);
+      setResponseMemo('');
+      setApprovedSummary(null);
+      setRespondMessage(null);
+      setIsRespondErrorMessage(false);
+      respondSheetCloseTimerRef.current = null;
+    }, SHEET_ANIMATION_DURATION_MS);
   };
 
   const handleRespondRequest = async (action: 'approve' | 'reject' | 'return') => {
@@ -909,14 +1015,18 @@ const TicketsPage = () => {
         );
       }
 
-      const actionLabel =
-        action === 'approve'
-          ? '승인'
-          : action === 'reject'
-            ? '거절(사유 기록)'
-            : '반환(없던 일 처리)';
-
       setIsErrorMessage(false);
+
+      if (action === 'approve') {
+        setMessage('요청을 승인했습니다.');
+        setApprovedSummary({
+          remainingAvailableTicketCount: remainingAvailableAfterApprovePreview,
+        });
+        return;
+      }
+
+      const actionLabel = action === 'reject' ? '거절(사유 기록)' : '반환(없던 일 처리)';
+
       setMessage(`요청을 ${actionLabel}했습니다.`);
       closeRespondSheet();
     } catch {
@@ -1303,9 +1413,19 @@ const TicketsPage = () => {
       )}
 
       {isRequestSheetOpen && selectedRequestTicket && (
-        <div className="fixed inset-0 z-30 bg-slate-900/50">
-          <div className="absolute inset-x-0 bottom-0 rounded-t-3xl border border-slate-200 bg-white p-6 shadow-2xl">
-            <div className="mx-auto w-full max-w-3xl space-y-4">
+        <div
+          className={`fixed inset-0 z-30 flex items-end justify-center bg-slate-900/50 transition-opacity duration-300 ${
+            isRequestSheetVisible ? 'opacity-100' : 'opacity-0'
+          }`}
+          onClick={closeRequestSheet}
+        >
+          <div
+            className={`w-full max-w-3xl rounded-t-3xl border border-slate-200 bg-white px-6 py-6 shadow-2xl transition-transform duration-300 ease-out ${
+              isRequestSheetVisible ? 'translate-y-0' : 'translate-y-full'
+            } max-h-[85svh] overflow-y-auto`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="space-y-4">
               <div className="space-y-1">
                 <p className="text-xs font-semibold text-teal-700">REQUEST TICKET</p>
                 <h2 className="text-xl font-bold text-slate-900">티켓 사용 요청</h2>
@@ -1315,12 +1435,57 @@ const TicketsPage = () => {
               </div>
 
               <form onSubmit={handleRequestSubmit} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label htmlFor="request-ticket" className="text-sm font-semibold text-slate-700">
+                    사용할 티켓
+                  </label>
+                  <select
+                    id="request-ticket"
+                    value={
+                      availableRequestTickets.some(
+                        (ticket) => ticket.id === selectedRequestTicket.id,
+                      )
+                        ? selectedRequestTicket.id
+                        : ''
+                    }
+                    onChange={(event) => {
+                      const nextTicket = availableRequestTickets.find(
+                        (ticket) => ticket.id === event.target.value,
+                      );
+
+                      if (!nextTicket) {
+                        return;
+                      }
+
+                      setSelectedRequestTicket(nextTicket);
+                      setRequestDate(startOfDay(new Date(nextTicket.createdAt)));
+                    }}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-teal-500 transition focus:border-teal-400 focus:ring-2"
+                  >
+                    {availableRequestTickets.length === 0 ? (
+                      <option value="">요청 가능한 티켓 없음</option>
+                    ) : (
+                      availableRequestTickets.map((ticket) => (
+                        <option key={ticket.id} value={ticket.id}>
+                          {ticket.title} (#{ticket.id.slice(0, 8)})
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                   <p className="text-sm font-semibold text-slate-800">
                     {selectedRequestTicket.title}
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
                     티켓 #{selectedRequestTicket.id.slice(0, 8)}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    만료 시각:{' '}
+                    {selectedRequestTicket.expiresAt
+                      ? formatDateTime(selectedRequestTicket.expiresAt)
+                      : '설정 안함'}
                   </p>
                 </div>
 
@@ -1375,6 +1540,31 @@ const TicketsPage = () => {
                   <p className="text-right text-xs text-slate-500">{requestMemo.length}/300</p>
                 </div>
 
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <label
+                    className="flex items-center justify-between gap-3"
+                    htmlFor="request-push-toggle"
+                  >
+                    <span className="text-sm font-semibold text-slate-700">Push 알림 전송</span>
+                    <input
+                      id="request-push-toggle"
+                      type="checkbox"
+                      checked={isPushNotificationEnabled}
+                      onChange={(event) => setIsPushNotificationEnabled(event.target.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                    />
+                  </label>
+                  <p className="mt-2 text-xs text-slate-500">
+                    {isPushNotificationEnabled
+                      ? '요청 전송 시 파트너에게 알림을 보냅니다.'
+                      : '알림 없이 요청만 저장됩니다.'}
+                  </p>
+                </div>
+
+                <p className="text-xs text-slate-500">
+                  요청 전송 후 파트너는 설정된 응답 대기 시간 내에 승인/거절을 선택할 수 있어요.
+                </p>
+
                 <div className="flex gap-2">
                   <button
                     type="button"
@@ -1386,7 +1576,9 @@ const TicketsPage = () => {
                   </button>
                   <button
                     type="submit"
-                    disabled={isRequesting || !requestDateRange}
+                    disabled={
+                      isRequesting || !requestDateRange || availableRequestTickets.length === 0
+                    }
                     className="w-full rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-400"
                   >
                     {isRequesting ? '요청 전송 중...' : '요청 보내기'}
@@ -1409,106 +1601,164 @@ const TicketsPage = () => {
       )}
 
       {isRespondSheetOpen && selectedPendingRequest && (
-        <div className="fixed inset-0 z-40 bg-slate-900/50">
-          <div className="absolute inset-x-0 bottom-0 rounded-t-3xl border border-slate-200 bg-white p-6 shadow-2xl">
-            <div className="mx-auto w-full max-w-3xl space-y-4">
+        <div
+          className={`fixed inset-0 z-40 flex items-end justify-center bg-slate-900/50 transition-opacity duration-300 ${
+            isRespondSheetVisible ? 'opacity-100' : 'opacity-0'
+          }`}
+          onClick={closeRespondSheet}
+        >
+          <div
+            className={`w-full max-w-3xl rounded-t-3xl border border-slate-200 bg-white px-6 py-6 shadow-2xl transition-transform duration-300 ease-out ${
+              isRespondSheetVisible ? 'translate-y-0' : 'translate-y-full'
+            } max-h-[85svh] overflow-y-auto`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="space-y-4">
               <div className="space-y-1">
                 <p className="text-xs font-semibold text-blue-700">RESPONSE REQUEST</p>
                 <h2 className="text-xl font-bold text-slate-900">요청 승인/거절 처리</h2>
                 <p className="text-sm text-slate-600">요청 정보를 확인하고 액션을 선택하세요.</p>
               </div>
 
-              <section className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                <p className="font-semibold text-slate-800">{selectedPendingRequest.ticketTitle}</p>
-                <p className="mt-1 text-xs text-slate-500">
-                  요청자: {selectedPendingRequest.requestedBy.name}
-                  {selectedPendingRequest.requestedBy.email
-                    ? ` (${selectedPendingRequest.requestedBy.email})`
-                    : ''}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  요청 시각: {formatDateTime(selectedPendingRequest.createdAt)}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  사용 날짜: {selectedPendingRequest.requestedForDate}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  만료 시각: {formatDateTime(selectedPendingRequest.expiresAt)}
-                </p>
-                <p className="mt-2 text-xs text-slate-600">
-                  요청 메모: {selectedPendingRequest.memo || '없음'}
-                </p>
+              {approvedSummary ? (
+                <section className="space-y-4 rounded-xl border border-teal-200 bg-teal-50 p-5 text-sm">
+                  <div className="flex items-center gap-2 text-teal-800">
+                    <span
+                      aria-hidden="true"
+                      className="flex h-6 w-6 items-center justify-center rounded-full bg-teal-600 text-sm font-bold text-white"
+                    >
+                      ✓
+                    </span>
+                    <p className="text-base font-semibold">승인했어요</p>
+                  </div>
+                  <p className="text-sm text-teal-900">
+                    차감 후 잔여 티켓: {approvedSummary.remainingAvailableTicketCount}장
+                  </p>
+                  <button
+                    type="button"
+                    onClick={closeRespondSheet}
+                    className="w-full rounded-lg border border-teal-300 bg-white px-4 py-2 text-sm font-semibold text-teal-700 transition hover:bg-teal-100"
+                  >
+                    닫기
+                  </button>
+                </section>
+              ) : (
+                <>
+                  <section className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100 text-sm font-bold text-blue-700">
+                        {selectedPendingRequest.requestedBy.name.trim().charAt(0) || '요'}
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-slate-800">
+                          {selectedPendingRequest.requestedBy.name}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          요청 시각: {formatDateTime(selectedPendingRequest.createdAt)}
+                        </p>
+                      </div>
+                    </div>
 
-                <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      isTimeoutWarning(selectedPendingRequest.expiresAt)
-                        ? 'bg-rose-500'
-                        : 'bg-blue-500'
-                    }`}
-                    style={{
-                      width: `${getTimeoutProgress(
-                        selectedPendingRequest.createdAt,
-                        selectedPendingRequest.expiresAt,
-                      )}%`,
-                    }}
-                  />
-                </div>
-                <p className="mt-1 text-xs text-slate-500">
-                  {formatRemainingTime(selectedPendingRequest.expiresAt)}
-                </p>
-              </section>
+                    <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+                      <p className="text-xs font-semibold text-slate-500">요청 상세</p>
+                      <p className="mt-2 text-sm font-semibold text-slate-800">
+                        {selectedPendingRequest.ticketTitle}
+                      </p>
+                      <ul className="mt-2 space-y-1 text-xs text-slate-600">
+                        <li>티켓 번호: #{selectedPendingRequest.ticketId.slice(0, 8)}</li>
+                        <li>
+                          만료일:{' '}
+                          {selectedPendingTicket?.expiresAt
+                            ? formatDateTime(selectedPendingTicket.expiresAt)
+                            : '설정 안함'}
+                        </li>
+                        <li>차감 후 잔여 티켓: {remainingAvailableAfterApprovePreview}장</li>
+                        <li>사용 날짜: {selectedPendingRequest.requestedForDate}</li>
+                      </ul>
+                    </div>
 
-              <div className="space-y-1.5">
-                <label htmlFor="response-memo" className="text-sm font-semibold text-slate-700">
-                  거절 사유 (거절 시 필수, 반환 시 입력값은 무시)
-                </label>
-                <textarea
-                  id="response-memo"
-                  value={responseMemo}
-                  maxLength={300}
-                  onChange={(event) => setResponseMemo(event.target.value)}
-                  rows={3}
-                  placeholder="예: 일정이 맞지 않아 이번 요청은 거절할게요."
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none ring-teal-500 transition focus:border-teal-400 focus:ring-2"
-                />
-                <p className="text-right text-xs text-slate-500">{responseMemo.length}/300</p>
-              </div>
+                    <div className="mt-3 rounded-xl bg-white px-3 py-2 text-xs text-slate-700">
+                      요청 메모: {selectedPendingRequest.memo || '없음'}
+                    </div>
 
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
-                <button
-                  type="button"
-                  onClick={closeRespondSheet}
-                  disabled={isResponding}
-                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
-                >
-                  닫기
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleRespondRequest('approve')}
-                  disabled={isResponding}
-                  className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-400"
-                >
-                  승인
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleRespondRequest('reject')}
-                  disabled={isResponding}
-                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
-                >
-                  거절
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleRespondRequest('return')}
-                  disabled={isResponding}
-                  className="rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
-                >
-                  반환 처리
-                </button>
-              </div>
+                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          isTimeoutWarning(selectedPendingRequest.expiresAt)
+                            ? 'bg-rose-500'
+                            : 'bg-blue-500'
+                        }`}
+                        style={{
+                          width: `${getTimeoutProgress(
+                            selectedPendingRequest.createdAt,
+                            selectedPendingRequest.expiresAt,
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                    <p
+                      className={`mt-1 text-xs ${
+                        isTimeoutWarning(selectedPendingRequest.expiresAt)
+                          ? 'font-semibold text-rose-600'
+                          : 'text-slate-500'
+                      }`}
+                    >
+                      {formatRemainingTime(selectedPendingRequest.expiresAt)}
+                    </p>
+                  </section>
+
+                  <div className="space-y-1.5">
+                    <label htmlFor="response-memo" className="text-sm font-semibold text-slate-700">
+                      거절 사유 (거절 시 필수, 반환 시 입력값은 무시)
+                    </label>
+                    <textarea
+                      id="response-memo"
+                      value={responseMemo}
+                      maxLength={300}
+                      onChange={(event) => setResponseMemo(event.target.value)}
+                      rows={3}
+                      placeholder="예: 일정이 맞지 않아 이번 요청은 거절할게요."
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none ring-teal-500 transition focus:border-teal-400 focus:ring-2"
+                    />
+                    <p className="text-right text-xs text-slate-500">{responseMemo.length}/300</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+                    <button
+                      type="button"
+                      onClick={closeRespondSheet}
+                      disabled={isResponding}
+                      className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+                    >
+                      닫기
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRespondRequest('approve')}
+                      disabled={isResponding}
+                      className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                    >
+                      승인
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRespondRequest('reject')}
+                      disabled={isResponding}
+                      className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+                    >
+                      거절
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRespondRequest('return')}
+                      disabled={isResponding}
+                      className="rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+                    >
+                      반환 처리
+                    </button>
+                  </div>
+                </>
+              )}
 
               {respondMessage && (
                 <p

@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/server';
 interface CreateTicketRequestPayload {
   ticketId: string;
   memo: string | null;
+  requestedForDate: string;
 }
 
 const MAX_MEMO_LENGTH = 300;
@@ -15,11 +16,28 @@ const isValidUuid = (value: string): boolean => {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 };
 
+const isValidDateOnly = (value: string): boolean => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) {
+    return false;
+  }
+
+  return date.toISOString().slice(0, 10) === value;
+};
+
 const parsePayload = async (request: NextRequest): Promise<CreateTicketRequestPayload | null> => {
   try {
     const body = (await request.json()) as Partial<CreateTicketRequestPayload>;
 
     if (typeof body.ticketId !== 'string' || !isValidUuid(body.ticketId)) {
+      return null;
+    }
+
+    if (typeof body.requestedForDate !== 'string' || !isValidDateOnly(body.requestedForDate)) {
       return null;
     }
 
@@ -36,6 +54,7 @@ const parsePayload = async (request: NextRequest): Promise<CreateTicketRequestPa
     return {
       ticketId: body.ticketId,
       memo: normalizedMemo,
+      requestedForDate: body.requestedForDate,
     };
   } catch {
     return null;
@@ -47,7 +66,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   if (!payload) {
     return NextResponse.json(
-      { error: 'Invalid payload. ticketId(uuid) is required and memo must be <= 300 chars.' },
+      {
+        error:
+          'Invalid payload. ticketId(uuid), requestedForDate(YYYY-MM-DD) are required and memo must be <= 300 chars.',
+      },
       { status: 400 },
     );
   }
@@ -88,7 +110,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const { data: ticket, error: ticketError } = await adminClient
     .from('tickets')
-    .select('id, couple_id, status')
+    .select('id, couple_id, status, created_at, expires_at')
     .eq('id', payload.ticketId)
     .limit(1)
     .maybeSingle();
@@ -106,6 +128,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   if (ticket.status !== 'available') {
     return NextResponse.json({ error: 'Only available ticket can be requested.' }, { status: 409 });
+  }
+
+  const issuedDate = new Date(ticket.created_at).toISOString().slice(0, 10);
+  const maxRequestedDate = ticket.expires_at
+    ? new Date(new Date(ticket.expires_at).getTime() - 1).toISOString().slice(0, 10)
+    : null;
+
+  if (payload.requestedForDate < issuedDate) {
+    return NextResponse.json(
+      { error: `Requested date must be on or after issued date (${issuedDate}).` },
+      { status: 400 },
+    );
+  }
+
+  if (maxRequestedDate && payload.requestedForDate > maxRequestedDate) {
+    return NextResponse.json(
+      { error: `Requested date must be on or before ${maxRequestedDate}.` },
+      { status: 400 },
+    );
   }
 
   const { data: pendingRequest, error: pendingError } = await adminClient
@@ -126,6 +167,32 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (pendingRequest) {
     return NextResponse.json(
       { error: 'Pending request already exists for this ticket.' },
+      { status: 409 },
+    );
+  }
+
+  const { data: rejectedOnSameDate, error: rejectedLookupError } = await adminClient
+    .from('ticket_requests')
+    .select('id')
+    .eq('ticket_id', payload.ticketId)
+    .eq('status', 'rejected')
+    .eq('requested_for_date', payload.requestedForDate)
+    .limit(1)
+    .maybeSingle();
+
+  if (rejectedLookupError) {
+    return NextResponse.json(
+      { error: `Failed to verify rejected requests: ${rejectedLookupError.message}` },
+      { status: 500 },
+    );
+  }
+
+  if (rejectedOnSameDate) {
+    return NextResponse.json(
+      {
+        error:
+          '이미 거절된 사용 날짜입니다. 같은 날짜로 다시 요청하려면 파트너가 반환 처리한 요청을 사용하거나 다른 날짜를 선택해주세요.',
+      },
       { status: 409 },
     );
   }
@@ -179,10 +246,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       ticket_id: payload.ticketId,
       requested_by: user.id,
       memo: payload.memo,
+      requested_for_date: payload.requestedForDate,
       expires_at: expiresAt,
       status: 'pending',
     })
-    .select('id, ticket_id, requested_by, status, memo, expires_at, created_at')
+    .select('id, ticket_id, requested_by, status, memo, requested_for_date, expires_at, created_at')
     .single();
 
   if (createError || !createdRequest) {
@@ -215,6 +283,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       requestedBy: createdRequest.requested_by,
       status: createdRequest.status,
       memo: createdRequest.memo,
+      requestedForDate: createdRequest.requested_for_date,
       expiresAt: createdRequest.expires_at,
       createdAt: createdRequest.created_at,
     },

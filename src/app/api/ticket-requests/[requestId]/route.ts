@@ -79,6 +79,10 @@ export async function PATCH(
     );
   }
 
+  if (payload.action === 'reject' && !payload.logMemo) {
+    return NextResponse.json({ error: 'Reject action requires a reason.' }, { status: 400 });
+  }
+
   const supabase = createClient();
   const {
     data: { user },
@@ -115,7 +119,9 @@ export async function PATCH(
 
   const { data: existingRequest, error: requestLoadError } = await adminClient
     .from('ticket_requests')
-    .select('id, ticket_id, requested_by, status, memo, expires_at, created_at')
+    .select(
+      'id, ticket_id, requested_by, status, memo, requested_for_date, response_memo, expires_at, created_at',
+    )
     .eq('id', requestId)
     .limit(1)
     .maybeSingle();
@@ -155,16 +161,20 @@ export async function PATCH(
 
   const targetRequestStatus = toRequestStatus(payload.action);
   const nowIso = new Date().toISOString();
+  const nextResponseMemo = payload.action === 'reject' ? payload.logMemo : null;
 
   const { data: updatedRequest, error: requestUpdateError } = await adminClient
     .from('ticket_requests')
     .update({
       status: targetRequestStatus,
+      response_memo: nextResponseMemo,
       responded_at: nowIso,
     })
     .eq('id', requestId)
     .eq('status', 'pending')
-    .select('id, ticket_id, requested_by, status, memo, expires_at, responded_at, created_at')
+    .select(
+      'id, ticket_id, requested_by, status, memo, requested_for_date, response_memo, expires_at, responded_at, created_at',
+    )
     .limit(1)
     .maybeSingle();
 
@@ -203,6 +213,7 @@ export async function PATCH(
       .from('ticket_requests')
       .update({
         status: 'pending',
+        response_memo: null,
         responded_at: null,
       })
       .eq('id', requestId)
@@ -229,7 +240,7 @@ export async function PATCH(
     const { error: logInsertError } = await adminClient.from('ticket_logs').insert({
       ticket_id: existingRequest.ticket_id,
       request_id: requestId,
-      memo: payload.logMemo ?? existingRequest.memo,
+      memo: payload.logMemo ?? existingRequest.memo ?? '승인 처리됨',
     });
 
     if (logInsertError) {
@@ -237,6 +248,7 @@ export async function PATCH(
         .from('ticket_requests')
         .update({
           status: 'pending',
+          response_memo: null,
           responded_at: null,
         })
         .eq('id', requestId)
@@ -275,6 +287,8 @@ export async function PATCH(
       requestedBy: updatedRequest.requested_by,
       status: updatedRequest.status,
       memo: updatedRequest.memo,
+      requestedForDate: updatedRequest.requested_for_date,
+      responseMemo: updatedRequest.response_memo,
       expiresAt: updatedRequest.expires_at,
       respondedAt: updatedRequest.responded_at,
       createdAt: updatedRequest.created_at,

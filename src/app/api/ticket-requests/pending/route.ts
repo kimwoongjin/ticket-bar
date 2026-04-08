@@ -10,6 +10,7 @@ interface PendingRequestRow {
   requested_by: string;
   status: 'pending';
   memo: string | null;
+  requested_for_date: string | null;
   expires_at: string;
   created_at: string;
 }
@@ -74,7 +75,7 @@ export async function GET(): Promise<NextResponse> {
 
   const { data: pendingRequests, error: pendingError } = await adminClient
     .from('ticket_requests')
-    .select('id, ticket_id, requested_by, status, memo, expires_at, created_at')
+    .select('id, ticket_id, requested_by, status, memo, requested_for_date, expires_at, created_at')
     .in('ticket_id', requestedTicketIds)
     .eq('status', 'pending')
     .order('created_at', { ascending: false });
@@ -128,6 +129,7 @@ export async function GET(): Promise<NextResponse> {
         ({ id: request.requested_by, name: '사용자', email: null } as const),
       status: request.status,
       memo: request.memo,
+      requestedForDate: request.requested_for_date ?? request.created_at.slice(0, 10),
       expiresAt: request.expires_at,
       createdAt: request.created_at,
     })),

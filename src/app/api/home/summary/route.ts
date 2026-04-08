@@ -11,6 +11,7 @@ interface PendingRequestRow {
   ticket_id: string;
   requested_by: string;
   memo: string | null;
+  requested_for_date: string | null;
   expires_at: string;
   created_at: string;
 }
@@ -113,7 +114,7 @@ export async function GET(): Promise<NextResponse> {
   if (requestedTicketIds.length > 0) {
     let pendingQuery = adminClient
       .from('ticket_requests')
-      .select('id, ticket_id, requested_by, memo, expires_at, created_at')
+      .select('id, ticket_id, requested_by, memo, requested_for_date, expires_at, created_at')
       .in('ticket_id', requestedTicketIds)
       .eq('status', 'pending')
       .order('created_at', { ascending: false });
@@ -177,6 +178,8 @@ export async function GET(): Promise<NextResponse> {
             email: requesterMap.get(latestPending.requested_by)?.email ?? null,
           },
           memo: latestPending.memo,
+          requestedForDate:
+            latestPending.requested_for_date ?? latestPending.created_at.slice(0, 10),
           expiresAt: latestPending.expires_at,
           createdAt: latestPending.created_at,
         }
